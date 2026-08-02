@@ -1,0 +1,19 @@
+# Секреты
+publish-memory/*.env.local
+publish-memory/_TEMP_*
+deploy/cloud-worker/.env.deploy
+deploy/cloud-worker/.env.deploy.yaml
+deploy/cloud-worker/app/
+
+# Runtime
+publish-memory/worker-state.json
+publish-memory/output/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/

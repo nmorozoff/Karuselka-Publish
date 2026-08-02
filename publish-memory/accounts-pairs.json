@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "description": "Две пары IG+TikTok. Фабрика пишет в очередь, publish читает.",
+  "schedule": {
+    "carousels_per_day_per_pair": 3,
+    "pair1_msk": ["10:00", "17:00", "20:00"],
+    "pair2_msk": ["11:00", "18:00", "21:00"],
+    "note": "Cloud: deploy/cloud-worker/setup-scheduler.sh. Локально: install_publish_cron.sh"
+  },
+  "pair1": {
+    "id": "pair1",
+    "label": "Инста1 + TikTok1 (Excalibur cover EMDR)",
+    "instagram_account": "pair1_instagram",
+    "tiktok_account": "pair1_tiktok",
+    "zernio_instagram_account_id": "6a3b7aae9d9472faaecf24f5",
+    "zernio_tiktok_account_id": "6a37de5c5f7d1751ab2d389e",
+    "dropbox_root": "/Content_Plan/Pair1",
+    "airtable": {
+      "base_id": "appQTNsDMuodYyp34",
+      "table_id": "tblFWCmLCXLrOdKut",
+      "fields": {
+        "name": "Name",
+        "instagram_caption": "Описание карусели",
+        "tiktok_title": "TikTok заголовок",
+        "tiktok_description": "TikTok описание",
+        "folder_path": "Dropbox Path"
+      }
+    },
+    "style_fixed": "excalibur-cover-emdr"
+  },
+  "pair2": {
+    "id": "pair2",
+    "label": "Инста2 + TikTok2 (Минимализм)",
+    "instagram_account": "@natalia_morozova_psy",
+    "tiktok_account": "@natalyamorozovapsy",
+    "zernio_instagram_account_id": "6a6a3ccadf17280d93d6828d",
+    "zernio_tiktok_account_id": "6a6a3bf5df17280d93d66feb",
+    "dropbox_root": "/Content_Plan/Pair2",
+    "airtable": {
+      "base_id": "appQTNsDMuodYyp34",
+      "table_id": "tbl2zotNwOmWLSTyC",
+      "fields": {
+        "name": "Name",
+        "instagram_caption": "Описание карусели",
+        "tiktok_title": "TikTok заголовок",
+        "tiktok_description": "TikTok описание",
+        "folder_path": "Dropbox Path"
+      }
+    },
+    "style_fixed": "minimalism"
+  }
+}
