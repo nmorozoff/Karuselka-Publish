@@ -1,4 +1,6 @@
-# Karuselka Publish
+# Karuselka Publish (Каруселька Publish)
+
+**GitHub:** https://github.com/nmorozoff/Karuselka-Publish (private)
 
 **Доставка** Instagram/TikTok каруселей из очереди Airtable → Zernio API.
 
@@ -51,6 +53,8 @@ python scripts/publish_worker.py --pair pair1 --limit 1
 ```bash
 ./deploy/cloud-worker/setup-cloud-automation.sh
 ```
+
+**Cloud Run (production):** `https://karuselka-publish-worker-rzx6vlimsa-ew.a.run.app`
 
 ## Контракт очереди
 
