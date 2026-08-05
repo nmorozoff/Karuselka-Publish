@@ -74,6 +74,25 @@ def _ready_records(records: list[dict], state: dict, pair_id: str) -> list[dict]
     ]
 
 
+def queue_next_hint(
+    env: dict[str, str],
+    pair_id: str,
+    state: dict,
+    *,
+    exclude_name: str | None = None,
+) -> tuple[str | None, int]:
+    """Return (next carousel name, ready count) after optional exclude."""
+    pair = pair_config(pair_id)
+    ready = _ready_records(list_queue_records(env, pair), state, pair_id)
+    if exclude_name:
+        ready = [r for r in ready if r.get("fields", {}).get("Name") != exclude_name]
+    ready.sort(key=lambda r: r.get("fields", {}).get("Name", ""))
+    if not ready:
+        return None, 0
+    name = ready[0].get("fields", {}).get("Name")
+    return name, len(ready)
+
+
 def get_queue_summary(env: dict[str, str] | None = None) -> dict[str, Any]:
     """Статус очереди: Airtable, published, failed, ready."""
     env = env or load_runtime_env()
@@ -548,12 +567,20 @@ def process_record(
 
             summary = get_queue_summary(env)
             remaining = {pid: summary["pairs"][pid]["ready"] for pid in ("pair1", "pair2", "pair3")}
+            notify_state = load_state(
+                dropbox_token if os.environ.get("WORKER_STATE_BACKEND") == "dropbox" else None
+            )
+            next_name, next_count = queue_next_hint(
+                env, accounts_pair.get("id", "pair1"), notify_state, exclude_name=name
+            )
             notify_from_publish_result(
                 accounts_pair.get("id", "pair1"),
                 accounts_pair.get("label", "pair"),
                 name,
                 result,
                 queue_remaining=remaining,
+                next_folder=next_name,
+                queue_ready=next_count,
             )
         except Exception as exc:  # noqa: BLE001
             if "max_error" not in result:
@@ -646,11 +673,28 @@ def run_publish_batch(
                 }
             results.append(res)
         except Exception as exc:  # noqa: BLE001
+            err_text = str(exc)
             state.setdefault("failed", {})[carousel_name] = {
                 "at": datetime.now(timezone.utc).isoformat(),
-                "error": str(exc),
+                "error": err_text,
             }
-            errors.append({"name": carousel_name, "error": str(exc)})
+            try:
+                from publish_incidents import log_incident
+
+                log_incident(
+                    pair=accounts_pair_id,
+                    stage="publish",
+                    error=err_text,
+                    carousel=carousel_name,
+                    suggested_files=[
+                        "scripts/lib/publish_engine.py",
+                        "scripts/lib/publish_cleanup.py",
+                        "scripts/lib/max_notify.py",
+                    ],
+                )
+            except Exception:
+                pass
+            errors.append({"name": carousel_name, "error": err_text})
 
     if not dry_run:
         save_state(state, dropbox_token if os.environ.get("WORKER_STATE_BACKEND") == "dropbox" else None)

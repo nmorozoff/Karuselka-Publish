@@ -65,32 +65,88 @@ def _extract_post_url(result: dict | None) -> str:
         first = posts[0]
         if isinstance(first, dict):
             return _extract_post_url(first)
+    post = result.get("post")
+    if isinstance(post, dict):
+        for platform in post.get("platforms") or []:
+            if not isinstance(platform, dict):
+                continue
+            pdata = platform.get("platformSpecificData") or {}
+            for key in ("permalink", "postUrl", "url"):
+                val = pdata.get(key) or platform.get(key)
+                if isinstance(val, str) and val.startswith("http"):
+                    return val
     return ""
 
 
-def _platform_status(result: dict | None, platform: str) -> str:
-    if not result or not isinstance(result, dict):
+def _zernio_platform_status(zernio_response: dict | None) -> str:
+    """Parse a single Zernio API response (instagram or tiktok block)."""
+    if not zernio_response or not isinstance(zernio_response, dict):
         return "not_attempted"
-    data = result.get(platform) if isinstance(result.get(platform), dict) else {}
-    if not data:
-        return "not_attempted"
-    if data.get("ok") or data.get("status") == "success" or data.get("published"):
-        return "ok"
-    if data.get("error") or data.get("message") or data.get("dry_run"):
+    if zernio_response.get("dry_run"):
+        return "dry_run"
+    if zernio_response.get("error") or zernio_response.get("errors"):
         return "failed"
+
+    post = zernio_response.get("post")
+    if isinstance(post, dict):
+        post_status = str(post.get("status") or "").lower()
+        if post_status in ("published", "success", "completed"):
+            return "ok"
+        if post_status in ("failed", "error"):
+            return "failed"
+        if post_status in ("scheduled", "pending", "processing"):
+            return "pending"
+        for platform in post.get("platforms") or []:
+            if not isinstance(platform, dict):
+                continue
+            ps = str(platform.get("status") or "").lower()
+            if ps in ("published", "success"):
+                return "ok"
+            if ps in ("failed", "error"):
+                return "failed"
+            if ps == "pending":
+                return "pending"
+        if post.get("_id"):
+            return "ok"
+
+    if zernio_response.get("_id") or zernio_response.get("id"):
+        return "ok"
+
+    msg = str(zernio_response.get("message") or "")
+    lower = msg.lower()
+    if msg and any(x in lower for x in ("fail", "error", "invalid")):
+        return "failed"
+    if msg and any(x in lower for x in ("retry", "pending", "scheduled")):
+        return "pending"
     return "unknown"
 
 
-def _platform_detail(result: dict | None, platform: str) -> str:
-    if not result or not isinstance(result, dict):
+def _zernio_platform_detail(zernio_response: dict | None) -> str:
+    if not zernio_response or not isinstance(zernio_response, dict):
         return "—"
-    data = result.get(platform) if isinstance(result.get(platform), dict) else {}
-    if not data:
-        return "—"
-    url = _extract_post_url(data)
+    if zernio_response.get("dry_run"):
+        return "dry-run"
+
+    url = _extract_post_url(zernio_response)
     if url:
         return url
-    err = data.get("error") or data.get("message") or data.get("detail")
+
+    post = zernio_response.get("post")
+    if isinstance(post, dict):
+        for platform in post.get("platforms") or []:
+            if not isinstance(platform, dict):
+                continue
+            err = platform.get("errorMessage") or platform.get("error")
+            if err:
+                return str(err)[:200]
+        if post.get("_id"):
+            return f"post_id={post['_id']}"
+
+    err = (
+        zernio_response.get("error")
+        or zernio_response.get("message")
+        or zernio_response.get("detail")
+    )
     if err:
         return str(err)[:200]
     return "—"
@@ -105,9 +161,9 @@ def build_publish_report_text(
     instagram_result: dict | None = None,
     tiktok_result: dict | None = None,
     next_folder: str | None = None,
+    queue_ready: int | None = None,
     error: str | None = None,
 ) -> str:
-    """Шаблон отчёта из CLOUD_AGENT_PROMPT.md."""
     lines = [f"🚀 Karuselka Publish — {pair_id}"]
     if pair_label and pair_label != pair_id:
         lines.append(f"({pair_label})")
@@ -116,11 +172,16 @@ def build_publish_report_text(
         lines.append(f"❌ Ошибка: {error}")
     else:
         lines.append(f"Режим: {mode}")
-        ig_status = _platform_status(instagram_result, "instagram")
-        tt_status = _platform_status(tiktok_result, "tiktok")
-        lines.append(f"Instagram: {ig_status} ({_platform_detail(instagram_result, 'instagram')})")
-        lines.append(f"TikTok: {tt_status} ({_platform_detail(tiktok_result, 'tiktok')})")
-    lines.append(f"Следующий: {next_folder or 'очередь пуста'}")
+        ig_status = _zernio_platform_status(instagram_result)
+        tt_status = _zernio_platform_status(tiktok_result)
+        lines.append(f"Instagram: {ig_status} ({_zernio_platform_detail(instagram_result)})")
+        lines.append(f"TikTok: {tt_status} ({_zernio_platform_detail(tiktok_result)})")
+    if queue_ready is not None and queue_ready > 0 and next_folder:
+        lines.append(f"Следующий: {next_folder} (ещё {queue_ready} в очереди)")
+    elif next_folder:
+        lines.append(f"Следующий: {next_folder}")
+    else:
+        lines.append("Следующий: очередь пуста")
     return "\n".join(lines)
 
 
@@ -178,6 +239,7 @@ def notify_publish_complete(
     instagram_result: dict | None = None,
     tiktok_result: dict | None = None,
     next_folder: str | None = None,
+    queue_ready: int | None = None,
     error: str | None = None,
 ) -> None:
     send_message(
@@ -189,6 +251,7 @@ def notify_publish_complete(
             instagram_result=instagram_result,
             tiktok_result=tiktok_result,
             next_folder=next_folder,
+            queue_ready=queue_ready,
             error=error,
         )
     )
@@ -201,15 +264,38 @@ def notify_from_publish_result(
     result: dict,
     queue_remaining: dict[str, int] | None = None,
     next_folder: str | None = None,
+    queue_ready: int | None = None,
 ) -> None:
+    if queue_ready is None and queue_remaining:
+        queue_ready = queue_remaining.get(pair_id)
+
+    ig = result.get("instagram") if isinstance(result.get("instagram"), dict) else None
+    tt = result.get("tiktok") if isinstance(result.get("tiktok"), dict) else None
+    ig_status = _zernio_platform_status(ig)
+    tt_status = _zernio_platform_status(tt)
+    if ig_status in ("unknown", "not_attempted") and tt_status in ("unknown", "not_attempted"):
+        try:
+            from publish_incidents import log_incident
+
+            log_incident(
+                pair=pair_id,
+                stage="notify",
+                error="MAX report could not parse Zernio instagram/tiktok blocks",
+                carousel=carousel_name,
+                context={"instagram_status": ig_status, "tiktok_status": tt_status},
+            )
+        except Exception:
+            pass
+
     text = build_publish_report_text(
         pair_id=pair_id,
         pair_label=pair_label,
         carousel_name=carousel_name,
         mode=str(result.get("mode") or "mixed"),
-        instagram_result=result.get("instagram") if isinstance(result.get("instagram"), dict) else None,
-        tiktok_result=result.get("tiktok") if isinstance(result.get("tiktok"), dict) else None,
+        instagram_result=ig,
+        tiktok_result=tt,
         next_folder=next_folder,
+        queue_ready=queue_ready,
         error=result.get("error"),
     )
     try:

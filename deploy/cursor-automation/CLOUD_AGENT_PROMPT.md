@@ -40,41 +40,40 @@ karuselka-publish (ты)
 
 ## 4. Runbook Per Trigger
 
+**Правило:** при ошибке — диагностика, retry, `publish_incident.py`, **не stop без Fixic**.
+
+См. также `deploy/cursor-automation/PUBLISH_FIXIC.md`.
+
 ### Step 0 — Materialize secrets
 ```bash
 python3 scripts/materialize_cloud_env.py --check
 python3 scripts/cloud_preflight.py
 ```
-Если preflight не проходит — **не продолжать**, написать отчёт в Макс с ошибкой.
+Если не проходит — `materialize_cloud_env.py` без `--check`, повторить 1 раз. Иначе incident + Fixic.
 
-### Step 1 — Check queue status
+### Step 1 — Check queue status (Dropbox state в cloud)
 ```bash
-python3 scripts/publish_status.py --pair {pair}
+WORKER_STATE_BACKEND=dropbox WORKER_STATE_DROPBOX_PATH=/Content_Plan/.karuselka/worker-state.json \
+  python3 scripts/publish_status.py --pair {pair}
 ```
-Если очередь пустая — завершить run, сообщить в Макс: «Очередь {pair} пуста, публикация не требуется».
+Если ready=0 и failed>0 — попробовать `--retry-failed` после диагностики.
+Если ready=0 и failed=0 — Макс «очередь пуста», Fixic (cron/automation).
 
-### Step 2 — Dry-run (always first)
+### Step 2 — Dry-run first (always)
 ```bash
-python3 scripts/publish_worker.py --pair {pair} --limit 1 --dry-run
-```
-Проверить, что в dry-run корректно резолвятся:
-- имя папки из Airtable;
-- путь в Dropbox;
-- файлы `slide-01..06.png`;
-- `slide-01.mp4` для Instagram (если есть — mixed mode, если нет — photo_carousel);
-- caption и TikTok title/description.
-
-Если dry-run падает — **не запускать реальную публикацию**, зафиксировать в `failed`, отчёт в Макс.
-
-### Step 3 — Real publish
-```bash
-python3 scripts/publish_worker.py --pair {pair} --limit 1
+WORKER_STATE_BACKEND=dropbox WORKER_STATE_DROPBOX_PATH=/Content_Plan/.karuselka/worker-state.json \
+  python3 scripts/publish_worker.py --pair {pair} --limit 1 --dry-run-first
 ```
 
-### Step 4 — Verify & report
-- Проверить `worker-state.json`.
-- Если успех — Макс-бот: pair, folder name, IG post URL (если Zernio возвращает), TT status.
-- Если ошибка — Макс-бот: полный traceback + имя папки + статус.
+### Step 3 — Verify MAX report
+Отчёт должен показывать реальный статус Zernio (`ok` / `failed` / `pending`), не `not_attempted`.
+`Следующий:` — имя следующей карусели или «очередь пуста».
+
+### Step 4 — Fixic (mandatory on any incident)
+```bash
+python3 scripts/publish_incident.py --list-open
+# читать deploy/cursor-automation/PUBLISH_FIXIC.md
+```
 
 ## 5. Publish Mode Logic
 
@@ -122,11 +121,14 @@ python3 scripts/publish_worker.py --pair {pair} --limit 1
 
 ## 7. Error Handling & Idempotency
 
-- Ошибка публикации → запись в `worker-state.json → failed` с timestamp и текстом ошибки. Следующий запуск продолжает очередь.
-- Успешная публикация → запись в `worker-state.json → published` (или `published_pair2`, `published_pair3`).
-- Повторный запуск с тем же именем папки: воркер должен проверить `published` и пропустить, если уже опубликовано.
-- Если Airtable пустая — не паниковать, не писать в failed, просто отчёт в Макс.
-- Если Dropbox папка не найдена — failed, Макс.
+- **Не останавливаться** на первой ошибке: incident → retry (если уместно) → Fixic.
+- `python3 scripts/publish_incident.py --pair {pair} --stage {stage} --error "..."`
+- Ошибка публикации → `worker-state.json → failed` + incident.
+- Успех → `published` / `published_pair2` / `published_pair3`.
+- Повтор с тем же именем: пропуск если уже в `published`.
+- Airtable пустая (ready=0, failed=0): Макс + Fixic (проверить cron).
+- Dropbox 409: legacy path / wrong Pair folder — диагностика, не молчать.
+- **Fixic обязателен** при любом open incident: `PUBLISH_FIXIC.md`.
 - Если Zernio rate-limit / 5xx — retry 1 раз через 60 секунд, потом failed.
 
 ## 8. Cleanup

@@ -68,12 +68,34 @@ def main() -> None:
             dry_result["mode"] = "dry_run_first"
             dry_result["aborted"] = True
             dry_result["reason"] = "dry run failed"
+            try:
+                from publish_incidents import log_incident
+
+                err = dry_result.get("errors") or dry_result.get("message") or "dry run failed"
+                log_incident(
+                    pair=args.pair,
+                    stage="dry_run",
+                    error=str(err)[:4000],
+                    context={"worker_last_run": "publish-memory/output/worker-last-run.json"},
+                )
+            except Exception:
+                pass
             _write_and_print(dry_result)
             raise SystemExit(1)
         if dry_result.get("status") == "empty":
             dry_result["mode"] = "dry_run_first"
             dry_result["aborted"] = True
             dry_result["reason"] = "queue empty"
+            try:
+                from publish_incidents import log_incident
+
+                log_incident(
+                    pair=args.pair,
+                    stage="queue",
+                    error="queue empty at dry-run-first",
+                )
+            except Exception:
+                pass
             _write_and_print(dry_result)
             return
 
