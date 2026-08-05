@@ -23,7 +23,7 @@ cp publish-memory/*.env.example publish-memory/*.env.local
 cd publish-memory && ln -sf ../../КАРУСЕЛЬКА/carusel-memory/airtable.env.local airtable.env.local
 ln -sf ../../КАРУСЕЛЬКА/carusel-memory/dropbox.env.local publish-memory/dropbox.env.local
 ln -sf ../../КАРУСЕЛЬКА/carusel-memory/zernio.env.local publish-memory/zernio.env.local
-ln -sf ../../КАРУСЕЛЬКА/carusel-memory/telegram.env.local publish-memory/telegram.env.local
+ln -sf ../../Посты\ EMDR/posts-emdr-memory/max.env.local publish-memory/max.env.local
 
 # Статус очереди
 python scripts/publish_status.py
@@ -31,30 +31,39 @@ python scripts/publish_status.py
 # Dry-run (без публикации)
 python scripts/publish_worker.py --pair pair1 --name crsl_20260802_1320_782 --dry-run
 
-# Публикация — только по явному запросу
-python scripts/publish_worker.py --pair pair1 --limit 1
+# Публикация — только по явному запросу (с dry-run-first автоматически)
+python scripts/publish_worker.py --pair pair3 --limit 1 --dry-run-first
 ```
 
 ## Cursor plugin
 
 Плагин: `~/.cursor/plugins/local/karuselka-publish/`
 
-Директор Publish — статус, dry-run, публикация, Telegram. **Не генерирует** слайды.
+Директор Publish — статус, dry-run, публикация, отчёты в Макс-бот. Автоматизация — **Cursor Automations**. **Не генерирует** слайды.
 
 ## Расписание
 
-| Пара | Cloud Scheduler (MSK) | Локальный cron |
-|------|----------------------|----------------|
-| pair1 | 10:00, 17:00, 20:00 | `install_publish_cron.sh` |
-| pair2 | 11:00, 18:00, 21:00 | то же |
+**Основной путь — Cursor Automations (Cloud Agent):**
 
-**Один деплой в облако:**
+```bash
+# См. deploy/cursor-automation/README.md
+python3 deploy/cursor-automation/build-workflows.py   # 9 JSON-черновиков
+```
+
+| Пара | MSK |
+|------|-----|
+| pair1 | 10:00, 17:00, 20:00 |
+| pair2 | 11:00, 18:00, 21:00 |
+| pair3 | 12:00, 19:00, 22:00 |
+
+Secrets: [Cursor Cloud](https://cursor.com/dashboard/cloud-agents) → `deploy/cursor-automation/CLOUD-SECRETS.md`
+
+**Legacy (deprecated):** GCP Cloud Run + Scheduler
 
 ```bash
 ./deploy/cloud-worker/setup-cloud-automation.sh
+./deploy/cursor-automation/disable-gcp-scheduler.sh   # после миграции на Cursor
 ```
-
-**Cloud Run (production):** `https://karuselka-publish-worker-rzx6vlimsa-ew.a.run.app`
 
 ## Контракт очереди
 
@@ -71,7 +80,8 @@ publish-memory/
   accounts-pairs.json
   worker-state.json
   *.env.local            # не коммитить
-deploy/cloud-worker/     # Cloud Run + Scheduler
+deploy/cursor-automation/  # Cursor Automations (основной)
+deploy/cloud-worker/       # Legacy GCP
 shared/queue-contract.md
 ```
 
@@ -79,8 +89,8 @@ shared/queue-contract.md
 
 | Переменная | Default | Смысл |
 |------------|---------|-------|
-| `PUBLISH_MODE` | `grok_hook` | IG: mp4+png; TT: png only |
-| `EXPECTED_IMAGE_SLIDES` | `6` | Число PNG в папке |
+| `PUBLISH_MODE` | `grok_hook` (mixed) | IG: mp4+png; TT: png only |
+| `EXPECTED_IMAGE_SLIDES` | `6` | Число PNG в папке (6, 7 или 9) |
 
 ## Чеклист: deprecated в Karuselka-emdr
 

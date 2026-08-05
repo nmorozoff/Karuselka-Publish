@@ -1,0 +1,65 @@
+[
+  {
+    "id": "karuselka-publish-pair1-1000",
+    "pair": "pair1",
+    "time_msk": "10:00",
+    "cron": "0 7 * * *",
+    "file": "karuselka-publish-pair1-1000.json"
+  },
+  {
+    "id": "karuselka-publish-pair1-1700",
+    "pair": "pair1",
+    "time_msk": "17:00",
+    "cron": "0 14 * * *",
+    "file": "karuselka-publish-pair1-1700.json"
+  },
+  {
+    "id": "karuselka-publish-pair1-2000",
+    "pair": "pair1",
+    "time_msk": "20:00",
+    "cron": "0 17 * * *",
+    "file": "karuselka-publish-pair1-2000.json"
+  },
+  {
+    "id": "karuselka-publish-pair2-1100",
+    "pair": "pair2",
+    "time_msk": "11:00",
+    "cron": "0 8 * * *",
+    "file": "karuselka-publish-pair2-1100.json"
+  },
+  {
+    "id": "karuselka-publish-pair2-1800",
+    "pair": "pair2",
+    "time_msk": "18:00",
+    "cron": "0 15 * * *",
+    "file": "karuselka-publish-pair2-1800.json"
+  },
+  {
+    "id": "karuselka-publish-pair2-2100",
+    "pair": "pair2",
+    "time_msk": "21:00",
+    "cron": "0 18 * * *",
+    "file": "karuselka-publish-pair2-2100.json"
+  },
+  {
+    "id": "karuselka-publish-pair3-1200",
+    "pair": "pair3",
+    "time_msk": "12:00",
+    "cron": "0 9 * * *",
+    "file": "karuselka-publish-pair3-1200.json"
+  },
+  {
+    "id": "karuselka-publish-pair3-1900",
+    "pair": "pair3",
+    "time_msk": "19:00",
+    "cron": "0 16 * * *",
+    "file": "karuselka-publish-pair3-1900.json"
+  },
+  {
+    "id": "karuselka-publish-pair3-2200",
+    "pair": "pair3",
+    "time_msk": "22:00",
+    "cron": "0 19 * * *",
+    "file": "karuselka-publish-pair3-2200.json"
+  }
+]

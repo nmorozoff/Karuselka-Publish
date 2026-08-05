@@ -6,13 +6,13 @@
 
 ```text
 Фабрика (export_publish_bundle.py)
-  → Dropbox /Content_Plan/Pair1|Pair2/{Name}/
+  → Dropbox /Content_Plan/Pair1|Pair2|Pair3/{Name}/
   → Airtable row (очередь)
         ↓
 Publish (publish_worker.py)
-  → Zernio API (PUBLISH_MODE=grok_hook)
+  → Zernio API (PUBLISH_MODE=grok_hook / mixed)
   → cleanup Airtable + Dropbox
-  → Telegram notify
+  → Макс-бот notify
 ```
 
 ## Airtable
@@ -21,6 +21,7 @@ Publish (publish_worker.py)
 |------|------|-------|
 | pair1 | `appQTNsDMuodYyp34` | `tblFWCmLCXLrOdKut` |
 | pair2 | `appQTNsDMuodYyp34` | `tbl2zotNwOmWLSTyC` |
+| pair3 | `appQTNsDMuodYyp34` | `tblNv5eMi1BXbu4Tq` |
 
 ### Поля (обязательные)
 
@@ -39,6 +40,7 @@ Publish (publish_worker.py)
 |------|--------------|
 | pair1 | `/Content_Plan/Pair1/{Name}/` |
 | pair2 | `/Content_Plan/Pair2/{Name}/` |
+| pair3 | `/Content_Plan/Pair3/{Name}/` |
 
 `resolve_carousel_dropbox_path()` использует `pair.dropbox_root` из `publish-memory/accounts-pairs.json`, **не** legacy `/Content_Plan/{Name}`.
 
@@ -46,8 +48,8 @@ Publish (publish_worker.py)
 
 | Файл | Instagram | TikTok |
 |------|-----------|--------|
-| `slide-01.mp4` | ✅ hook (Grok 5s) | ❌ не уходит |
-| `slide-01.png` … `slide-06.png` | slide-02..06 в mixed carousel | все 6 PNG |
+| `slide-01.mp4` | ✅ hook (mixed carousel) | ❌ не уходит |
+| `slide-01.png` … `slide-06.png` | slide-02..06 в mixed carousel или все 6 в photo | все 6 PNG |
 | `caption.txt` | справочно | — |
 | `manifest.json` | контракт export | — |
 
@@ -78,6 +80,7 @@ Publish-воркер ориентируется на `PUBLISH_MODE=grok_hook` + 
 {
   "published": ["crsl_..."],
   "published_pair2": [],
+  "published_pair3": [],
   "failed": { "crsl_...": { "at": "...", "error": "..." } },
   "last_run": {}
 }
@@ -91,8 +94,8 @@ Publish-воркер ориентируется на `PUBLISH_MODE=grok_hook` + 
 |------|------------|
 | `publish-memory/airtable.env.local` | `AIRTABLE_ACCESS_TOKEN` |
 | `publish-memory/dropbox.env.local` | `DROPBOX_ACCESS_TOKEN` или OAuth trio |
-| `publish-memory/zernio.env.local` | `ZERNIO_API_KEY`, `PUBLISH_MODE` |
-| `publish-memory/telegram.env.local` | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_NOTIFY_CHAT_ID` |
+| `publish-memory/zernio.env.local` | `ZERNIO_API_KEY`, `ZERNIO_PAIR2_API_KEY`, `ZERNIO_PAIR3_API_KEY`, `PUBLISH_MODE` |
+| `publish-memory/max.env.local` | `MAX_BOT_TOKEN`, `MAX_NOTIFY_CHAT_ID` или `MAX_PREVIEW_CHAT_ID` |
 
 Можно symlink на `Karuselka-emdr/carusel-memory/*.env.local` при локальной разработке.
 

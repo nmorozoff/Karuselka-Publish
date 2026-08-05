@@ -57,33 +57,58 @@ def load_runtime_env() -> dict[str, str]:
         if missing:
             raise RuntimeError(f"Missing cloud env: {', '.join(missing)}")
         env = dict(os.environ)
-        if not env.get("TELEGRAM_BOT_TOKEN") or not env.get("TELEGRAM_NOTIFY_CHAT_ID"):
-            env.setdefault("TELEGRAM_NOTIFY_MISSING", "1")
+        if not env.get("MAX_BOT_TOKEN") or not (
+            env.get("MAX_NOTIFY_CHAT_ID")
+            or env.get("MAX_PREVIEW_CHAT_ID")
+            or env.get("MAX_CHAT_ID")
+        ):
+            env.setdefault("MAX_NOTIFY_MISSING", "1")
         return env
 
     return merge_env(
         MEMORY / "airtable.env.local",
         MEMORY / "dropbox.env.local",
         MEMORY / "zernio.env.local",
-        MEMORY / "telegram.env.local",
+        MEMORY / "max.env.local",
         MEMORY / "cloud-worker.env.local",
     )
 
 
 def pair_config(pair_id: str) -> dict:
     cfg = load_accounts_pairs()
-    key = "pair1" if pair_id in ("pair1", "1", "a", "variant-a") else "pair2"
+    key = pair_id if pair_id in ("pair1", "pair2", "pair3") else "pair1"
     return cfg[key]
 
 
 def zernio_api_key(env: dict[str, str], pair: dict) -> str:
-    if pair.get("id") == "pair2":
-        key = env.get("ZERNIO_PAIR2_API_KEY") or env.get("ZERNIO_API_KEY", "")
-    else:
-        key = env.get("ZERNIO_API_KEY", "")
-    if not key:
-        raise RuntimeError(f"Zernio API key missing for {pair.get('id', 'pair')}")
-    return key
+    """Zernio API key: pair2 может иметь свой, pair3 — отдельные IG/TT."""
+    pid = pair.get("id", "pair1")
+    if pid == "pair3":
+        # Pair3 может использовать разные ключи для IG и TikTok.
+        # Возвращаем fallback-цепочку; caller выбирает нужный через zernio_api_key_for_platform.
+        return (
+            env.get("ZERNIO_PAIR3_API_KEY", "")
+            or env.get("ZERNIO_PAIR3_INSTAGRAM_API_KEY", "")
+            or env.get("ZERNIO_PAIR3_TIKTOK_API_KEY", "")
+            or env.get("ZERNIO_API_KEY", "")
+        )
+    if pid == "pair2":
+        return env.get("ZERNIO_PAIR2_API_KEY") or env.get("ZERNIO_API_KEY", "")
+    return env.get("ZERNIO_API_KEY", "")
+
+
+def zernio_api_key_for_platform(env: dict[str, str], pair: dict, platform: str) -> str:
+    """API key для конкретной платформы (instagram/tiktok)."""
+    pid = pair.get("id", "pair1")
+    platform = platform.lower()
+    if pid == "pair3":
+        specific = env.get(f"ZERNIO_PAIR3_{platform.upper()}_API_KEY", "")
+        if specific:
+            return specific
+        return env.get("ZERNIO_PAIR3_API_KEY") or env.get("ZERNIO_API_KEY", "")
+    if pid == "pair2":
+        return env.get("ZERNIO_PAIR2_API_KEY") or env.get("ZERNIO_API_KEY", "")
+    return env.get("ZERNIO_API_KEY", "")
 
 
 def zernio_instagram_account_id(pair: dict, env: dict[str, str]) -> str:

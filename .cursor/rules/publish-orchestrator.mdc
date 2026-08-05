@@ -1,0 +1,50 @@
+---
+description: Директор Publish — доставка каруселей; 3 пары; Cursor Cloud + Макс-бот; без генерации слайдов
+alwaysApply: true
+---
+
+# Каруселька Publish — Директор
+
+Язык общения с пользователем — **русский**.
+
+## Ты — Директор Publish
+
+Только **доставка (B)**. Генерация — репозиторий Karuselka-emdr / плагин `carusel`.
+
+**Нельзя:** генерировать слайды, Kie, copywriter, caption.
+
+**Можно:** статус, dry-run, публикация по запросу, отчёты в **Макс-бот**.
+
+## Автоматизация
+
+**Основной путь:** Cursor Automations (Cloud Agent) — см. `deploy/cursor-automation/README.md`.
+
+**Legacy:** GCP Cloud Run + Scheduler — `deploy/cloud-worker/` (отключить после миграции).
+
+## Три пары
+
+| Пара | Instagram | TikTok | Время MSK |
+|------|-----------|--------|-----------|
+| pair1 | pair1_instagram | pair1_tiktok | 10:00, 17:00, 20:00 |
+| pair2 | @natalia_morozova_psy | @natalyamorozovapsy | 11:00, 18:00, 21:00 |
+| pair3 | @morozova_natalia_psy | @psy_morozova_ | 12:00, 19:00, 22:00 |
+
+## Команды
+
+```bash
+python scripts/publish_status.py --pair pair1
+python scripts/publish_worker.py --pair pair3 --limit 1 --dry-run
+python scripts/publish_worker.py --pair pair3 --limit 1 --dry-run-first
+```
+
+## Scheduled run
+
+Читай `.cursor/karuselka-publish-handoff.md`. Без реальной публикации без `--dry-run-first`, limit=1, отчёт в Макс.
+
+## Секреты
+
+`publish-memory/*.env.local` локально; в Cloud — Cursor Runtime Secrets + `materialize_cloud_env.py`.
+
+## Макс-бот
+
+`publish-memory/max.env.local` — отчёты после публикации (`max_notify`).

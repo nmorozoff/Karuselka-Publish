@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 import threading
 import time
 import urllib.error
@@ -17,7 +18,14 @@ from typing import Any
 from publish_cleanup import assert_zernio_ok, cleanup_carousel_assets
 from dropbox_client import ensure_shared_link, get_access_token
 from http_client import http_json, urlopen
-from publish_config import load_runtime_env, pair_config, resolve_carousel_dropbox_path, zernio_api_key, zernio_instagram_account_id, zernio_tiktok_account_id
+from publish_config import (
+    load_runtime_env,
+    pair_config,
+    resolve_carousel_dropbox_path,
+    zernio_api_key_for_platform,
+    zernio_instagram_account_id,
+    zernio_tiktok_account_id,
+)
 from worker_state import load_state, save_state
 
 CLOUD_RUN_URL = os.environ.get(
@@ -73,7 +81,7 @@ def get_queue_summary(env: dict[str, str] | None = None) -> dict[str, Any]:
     state = load_state(token if os.environ.get("WORKER_STATE_BACKEND") == "dropbox" else None)
 
     pairs_summary: dict[str, dict[str, int]] = {}
-    for pair_id in ("pair1", "pair2"):
+    for pair_id in ("pair1", "pair2", "pair3"):
         pair = pair_config(pair_id)
         records = list_queue_records(env, pair)
         published = _load_published_set(state, pair_id)
@@ -109,6 +117,49 @@ def pick_track(env: dict[str, str], pair: dict) -> dict:
     return random.choice(records).get("fields", {})
 
 
+def _slide_sort_key(path: str) -> int:
+    stem = Path(path).stem.lower()
+    match = re.search(r"(\d+)", stem)
+    return int(match.group(1)) if match else 0
+
+
+def dropbox_folder_candidates(pair: dict, fields: dict, name: str) -> list[str]:
+    """Кандидаты путей: Pair1/Pair2 → legacy /Content_Plan/{Name}."""
+    primary = resolve_carousel_dropbox_path(pair, fields, name)
+    root = os.environ.get("DROPBOX_CONTENT_PLAN_ROOT", "/Content_Plan").rstrip("/")
+    candidates = [primary, f"{root}/{name}"]
+    pair_root = pair.get("dropbox_root")
+    if pair_root:
+        candidates.append(f"{str(pair_root).rstrip('/')}/{name}")
+    seen: set[str] = set()
+    out: list[str] = []
+    for path in candidates:
+        norm = path if path.startswith("/") else f"/{path}"
+        if norm not in seen:
+            seen.add(norm)
+            out.append(norm)
+    return out
+
+
+def find_carousel_dropbox_folder(token: str, pair: dict, fields: dict, name: str) -> str:
+    """Первая существующая папка с файлами слайдов."""
+    last_err: Exception | None = None
+    for path in dropbox_folder_candidates(pair, fields, name):
+        try:
+            entries = list_folder_entries(token, path)
+            if any(
+                e.get(".tag") == "file"
+                and e.get("name", "").lower().startswith("slide-")
+                and e.get("name", "").lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".mp4"))
+                for e in entries
+            ):
+                return path
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+            continue
+    raise RuntimeError(f"No Dropbox carousel folder for {name}: {last_err}")
+
+
 def list_folder_entries(token: str, dropbox_folder: str) -> list[dict]:
     last_err: Exception | None = None
     for attempt in range(5):
@@ -130,28 +181,38 @@ def list_folder_entries(token: str, dropbox_folder: str) -> list[dict]:
 def list_media_bundle(token: str, dropbox_folder: str) -> dict[str, Any]:
     entries = list_folder_entries(token, dropbox_folder)
     images = sorted(
-        e["path_lower"]
-        for e in entries
-        if e.get(".tag") == "file"
-        and e.get("name", "").startswith("slide-")
-        and e.get("name", "").lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
+        (
+            e["path_lower"]
+            for e in entries
+            if e.get(".tag") == "file"
+            and e.get("name", "").lower().startswith("slide-")
+            and e.get("name", "").lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
+        ),
+        key=_slide_sort_key,
     )
     videos = sorted(
-        e["path_lower"]
-        for e in entries
-        if e.get(".tag") == "file"
-        and e.get("name", "").startswith("slide-")
-        and e.get("name", "").lower().endswith(".mp4")
+        (
+            e["path_lower"]
+            for e in entries
+            if e.get(".tag") == "file"
+            and e.get("name", "").lower().startswith("slide-")
+            and e.get("name", "").lower().endswith(".mp4")
+        ),
+        key=_slide_sort_key,
     )
-    hook_video = next((p for p in videos if Path(p).stem == "slide-01"), videos[0] if videos else None)
+    hook_video = next(
+        (p for p in videos if Path(p).stem.lower() in ("slide-01", "slide-1")),
+        videos[0] if videos else None,
+    )
 
-    expected = EXPECTED_IMAGE_SLIDES
-    if len(images) == 7 and expected == 6 and not hook_video:
-        expected = 7
-    if len(images) != expected:
-        raise RuntimeError(
-            f"Expected {expected} image slides in {dropbox_folder}, got {len(images)}"
-        )
+    count = len(images)
+    if count < 2:
+        raise RuntimeError(f"Too few image slides in {dropbox_folder}: {count}")
+    # Допустимые размеры: 6, 7 (legacy), 9 (3x3 grid)
+    allowed = {6, 7, 9}
+    if count not in allowed:
+        raise RuntimeError(f"Unexpected slide count in {dropbox_folder}: expected 6/7/9, got {count}")
+    expected = count
     return {
         "folder": dropbox_folder,
         "images": images,
@@ -160,9 +221,25 @@ def list_media_bundle(token: str, dropbox_folder: str) -> dict[str, Any]:
     }
 
 
-def build_instagram_grok_payload(
+def build_instagram_photo_payload(fields: dict, image_urls: list[str], account_id: str) -> dict:
+    """Instagram photo carousel — все PNG (нет hook-видео)."""
+    return {
+        "content": (fields.get("Описание карусели") or "")[:2200],
+        "mediaItems": [{"type": "image", "url": u} for u in image_urls],
+        "platforms": [{"platform": "instagram", "accountId": account_id}],
+        "publishNow": True,
+    }
+
+
+def build_instagram_images_payload(fields: dict, image_urls: list[str], account_id: str) -> dict:
+    """Deprecated alias — keep for compatibility."""
+    return build_instagram_photo_payload(fields, image_urls, account_id)
+
+
+def build_instagram_mixed_payload(
     fields: dict, hook_video_url: str, image_urls: list[str], account_id: str
 ) -> dict:
+    """Instagram: video hook + остальные PNG."""
     rest = image_urls[1:] if len(image_urls) > 1 else []
     media: list[dict[str, str]] = [{"type": "video", "url": hook_video_url}]
     media.extend({"type": "image", "url": u} for u in rest)
@@ -172,6 +249,13 @@ def build_instagram_grok_payload(
         "platforms": [{"platform": "instagram", "accountId": account_id}],
         "publishNow": True,
     }
+
+
+def build_instagram_grok_payload(
+    fields: dict, hook_video_url: str, image_urls: list[str], account_id: str
+) -> dict:
+    """Deprecated alias — keep for compatibility."""
+    return build_instagram_mixed_payload(fields, hook_video_url, image_urls, account_id)
 
 
 def build_tiktok_payload(fields: dict, image_urls: list[str], account_id: str) -> dict:
@@ -193,21 +277,36 @@ def build_tiktok_payload(fields: dict, image_urls: list[str], account_id: str) -
     }
 
 
-def post_zernio(api_key: str, body: dict | str, dry_run: bool = False) -> dict:
+def post_zernio(api_key: str, body: dict | str, *, dry_run: bool = False, retries: int = 1) -> dict:
     body_json = body if isinstance(body, str) else json.dumps(body, ensure_ascii=False)
     if dry_run:
         return {"dry_run": True, "platforms": json.loads(body_json).get("platforms")}
-    return http_json(
-        "POST",
-        ZERNIO_URL,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        },
-        body=body_json,
-        timeout=ZERNIO_TIMEOUT_SEC,
-    )
+    last_exc: Exception | None = None
+    for attempt in range(retries + 1):
+        try:
+            return http_json(
+                "POST",
+                ZERNIO_URL,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
+                body=body_json,
+                timeout=ZERNIO_TIMEOUT_SEC,
+            )
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            text = str(exc).lower()
+            retryable = any(
+                s in text
+                for s in ("429", "500", "502", "503", "504", "rate limit", "timeout")
+            )
+            if attempt < retries and retryable:
+                time.sleep(60)
+                continue
+            break
+    raise last_exc or RuntimeError("post_zernio failed")
 
 
 def _is_dropbox_missing(exc: BaseException) -> bool:
@@ -387,16 +486,18 @@ def process_record(
         raise RuntimeError("Record missing Name")
 
     dropbox_token = get_access_token(env)
-    dropbox_folder = resolve_carousel_dropbox_path(queue_pair, fields, name)
-    zernio_key = zernio_api_key(env, accounts_pair)
+    dropbox_folder = find_carousel_dropbox_folder(dropbox_token, queue_pair, fields, name)
+    ig_key = zernio_api_key_for_platform(env, accounts_pair, "instagram")
+    tt_key = zernio_api_key_for_platform(env, accounts_pair, "tiktok")
     ig_acc = zernio_instagram_account_id(accounts_pair, env)
     tt_acc = zernio_tiktok_account_id(accounts_pair, env)
     media = list_media_bundle(dropbox_token, dropbox_folder)
     slide_paths: list[str] = media["images"]
     hook_video: str | None = media["hook_video"]
-    use_grok = PUBLISH_MODE == "grok_hook" and bool(hook_video)
+    has_video = bool(hook_video)
 
     if dry_run:
+        mode = "mixed" if has_video else "photo_carousel"
         return {
             "dry_run": True,
             "name": name,
@@ -405,66 +506,48 @@ def process_record(
             "dropbox_folder": dropbox_folder,
             "zernio_instagram_account_id": ig_acc,
             "zernio_tiktok_account_id": tt_acc,
-            "mode": "grok_hook" if use_grok else "cloud_run_render",
+            "mode": mode,
             "images": len(slide_paths),
             "hook_video": hook_video,
         }
 
+    image_urls = [ensure_shared_link(p, dropbox_token) for p in slide_paths]
     if tiktok_only:
-        image_urls = [ensure_shared_link(p, dropbox_token) for p in slide_paths]
         tt_payload = build_tiktok_payload(fields, image_urls, tt_acc)
         result: dict[str, Any] = {
             "name": name,
-            "tiktok": post_zernio(zernio_key, tt_payload),
+            "tiktok": post_zernio(tt_key, tt_payload),
             "mode": "tiktok_only",
         }
-    elif use_grok:
+    elif has_video:
         assert hook_video is not None
-        image_urls = [ensure_shared_link(p, dropbox_token) for p in slide_paths]
         video_url = ensure_shared_link(hook_video, dropbox_token)
-        ig_payload = build_instagram_grok_payload(fields, video_url, image_urls, ig_acc)
+        ig_payload = build_instagram_mixed_payload(fields, video_url, image_urls, ig_acc)
         tt_payload = build_tiktok_payload(fields, image_urls, tt_acc)
         result = {
             "name": name,
             "airtable_id": rec["id"],
-            "mode": "grok_hook",
-            "instagram": post_zernio(zernio_key, ig_payload),
-            "tiktok": post_zernio(zernio_key, tt_payload),
+            "mode": "mixed",
+            "instagram": post_zernio(ig_key, ig_payload),
+            "tiktok": post_zernio(tt_key, tt_payload),
         }
     else:
-        track = pick_track(env, queue_pair)
-        payload = build_render_payload(fields, slide_paths, track)
-        ready_path = f"/Ready_Carousel/{name}"
-        if count_ready_videos(dropbox_token, name) > 0:
-            delete_dropbox_folder(dropbox_token, ready_path)
-        render = wait_for_render(
-            env, payload, dropbox_token, name, accounts_pair, expected_count=len(slide_paths)
-        )
-        ig_json = render.get("instagram_zernio_post_json")
-        tt_json = render.get("tiktok_zernio_post_json")
-        if not ig_json or not tt_json:
-            raise RuntimeError("Missing zernio JSON after render")
+        ig_payload = build_instagram_photo_payload(fields, image_urls, ig_acc)
+        tt_payload = build_tiktok_payload(fields, image_urls, tt_acc)
         result = {
             "name": name,
             "airtable_id": rec["id"],
-            "mode": "cloud_run_render",
-            "recovered_from_manifest": render.get("recovered_from_manifest", False),
+            "mode": "photo_carousel",
+            "instagram": post_zernio(ig_key, ig_payload),
+            "tiktok": post_zernio(tt_key, tt_payload),
         }
-        try:
-            result["instagram"] = post_zernio(zernio_key, ig_json)
-        except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(f"Zernio instagram failed for {name}: {exc}") from exc
-        try:
-            result["tiktok"] = post_zernio(zernio_key, tt_json)
-        except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(f"Zernio tiktok failed for {name}: {exc}") from exc
 
     if not dry_run:
         try:
-            from telegram_notify import notify_from_publish_result
+            from max_notify import notify_from_publish_result
 
             summary = get_queue_summary(env)
-            remaining = {pid: summary["pairs"][pid]["ready"] for pid in ("pair1", "pair2")}
+            remaining = {pid: summary["pairs"][pid]["ready"] for pid in ("pair1", "pair2", "pair3")}
             notify_from_publish_result(
                 accounts_pair.get("id", "pair1"),
                 accounts_pair.get("label", "pair"),
@@ -473,8 +556,8 @@ def process_record(
                 queue_remaining=remaining,
             )
         except Exception as exc:  # noqa: BLE001
-            if "telegram_error" not in result:
-                result["telegram_error"] = str(exc)
+            if "max_error" not in result:
+                result["max_error"] = str(exc)
 
     if not skip_cleanup:
         for label, key in (("instagram", "instagram"), ("tiktok", "tiktok")):
@@ -504,6 +587,7 @@ def run_publish_batch(
     skip_cleanup: bool = False,
     tiktok_only: bool = False,
     include_published: bool = False,
+    retry_failed: bool = False,
 ) -> dict[str, Any]:
     env = load_runtime_env()
     accounts_pair_id = accounts_pair_id or pair_id
@@ -519,7 +603,7 @@ def run_publish_batch(
     if name:
         records = [r for r in records if r.get("fields", {}).get("Name") == name]
     elif not include_published:
-        failed_names = set(state.get("failed", {}).keys())
+        failed_names = set() if retry_failed else set(state.get("failed", {}).keys())
         records = [
             r
             for r in records
@@ -555,6 +639,7 @@ def run_publish_batch(
             if not dry_run:
                 published.add(carousel_name)
                 state[_published_state_key(accounts_pair_id)] = sorted(published)
+                state.get("failed", {}).pop(carousel_name, None)
                 state.setdefault("last_run", {})[carousel_name] = {
                     "at": datetime.now(timezone.utc).isoformat(),
                     "ok": True,
@@ -570,7 +655,14 @@ def run_publish_batch(
     if not dry_run:
         save_state(state, dropbox_token if os.environ.get("WORKER_STATE_BACKEND") == "dropbox" else None)
 
-    status = "ok" if results and not errors else ("partial" if results else "error")
+    if not results and not errors:
+        status = "empty"
+    elif results and not errors:
+        status = "ok"
+    elif results:
+        status = "partial"
+    else:
+        status = "error"
     return {
         "status": status,
         "pair": accounts_pair_id,

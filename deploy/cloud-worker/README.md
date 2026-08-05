@@ -1,4 +1,6 @@
-# Облачная автоматизация публикации
+# Облачная автоматизация публикации (LEGACY)
+
+> **Deprecated.** Основной путь: [`deploy/cursor-automation/README.md`](../cursor-automation/README.md) (Cursor Cloud Agent + Automations).
 
 **Cloud Scheduler → Cloud Run → Zernio** (без Mac, без Make).
 
@@ -16,7 +18,7 @@ Cloud Scheduler (6 jobs)
     → POST /run?pair=pair1|pair2&limit=1  (X-Worker-Key)
     → karuselka-publish-worker (Cloud Run)
         → Airtable → Dropbox → Zernio IG+TikTok
-        → cleanup → Telegram
+        → cleanup → Макс-бот
     → worker-state в Dropbox /Content_Plan/.karuselka/worker-state.json
 ```
 
@@ -77,7 +79,7 @@ Legacy jobs `karuselka-publish-1100/1700/2100` удаляются при setup.
 - Cloud Run API, Cloud Scheduler API
 - Billing включён
 - `gcloud auth login`
-- Секреты: Airtable, Dropbox OAuth, Zernio, Telegram, `WORKER_API_KEY`
+- Секреты: Airtable, Dropbox OAuth, Zernio, MAX (`MAX_BOT_TOKEN`, `MAX_PREVIEW_CHAT_ID`), `WORKER_API_KEY`
 
 ## Локальный резерв (Mac)
 

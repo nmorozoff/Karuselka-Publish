@@ -33,7 +33,7 @@ read_env() {
   read_env "$MEMORY/airtable.env.local"
   read_env "$MEMORY/dropbox.env.local"
   read_env "$MEMORY/zernio.env.local"
-  read_env "$MEMORY/telegram.env.local"
+  read_env "$MEMORY/max.env.local"
   read_env "$MEMORY/cloud-worker.env.local"
 } > "$ROOT/deploy/cloud-worker/.env.deploy.yaml"
 

@@ -1,15 +1,16 @@
 {
-  "version": 1,
-  "description": "Две пары IG+TikTok. Фабрика пишет в очередь, publish читает.",
+  "version": 2,
+  "description": "Три пары IG+TikTok. Pair1 = скетч. Pair2 = Минимализм / BORDO. Pair3 = скетч neon / BORDO (отдельные Zernio API IG/TT).",
   "schedule": {
     "carousels_per_day_per_pair": 3,
     "pair1_msk": ["10:00", "17:00", "20:00"],
     "pair2_msk": ["11:00", "18:00", "21:00"],
-    "note": "Cloud: deploy/cloud-worker/setup-scheduler.sh. Локально: install_publish_cron.sh"
+    "pair3_msk": ["12:00", "19:00", "22:00"],
+    "note": "Cursor Automations: cron UTC = MSK-3. По 1 карусели за запуск."
   },
   "pair1": {
     "id": "pair1",
-    "label": "Инста1 + TikTok1 (Excalibur cover EMDR)",
+    "label": "Инста1 + TikTok1 (Excalibur sketch pink)",
     "instagram_account": "pair1_instagram",
     "tiktok_account": "pair1_tiktok",
     "zernio_instagram_account_id": "6a3b7aae9d9472faaecf24f5",
@@ -22,15 +23,15 @@
         "name": "Name",
         "instagram_caption": "Описание карусели",
         "tiktok_title": "TikTok заголовок",
-        "tiktok_description": "TikTok описание",
-        "folder_path": "Dropbox Path"
+        "tiktok_description": "TikTok описание"
       }
     },
-    "style_fixed": "excalibur-cover-emdr"
+    "style_fixed": "excalibur-sketch-collage",
+    "publish_times_msk": ["10:00", "17:00", "20:00"]
   },
   "pair2": {
     "id": "pair2",
-    "label": "Инста2 + TikTok2 (Минимализм)",
+    "label": "Инста2 + TikTok2 (Минимализм / BORDO)",
     "instagram_account": "@natalia_morozova_psy",
     "tiktok_account": "@natalyamorozovapsy",
     "zernio_instagram_account_id": "6a6a3ccadf17280d93d6828d",
@@ -43,10 +44,33 @@
         "name": "Name",
         "instagram_caption": "Описание карусели",
         "tiktok_title": "TikTok заголовок",
-        "tiktok_description": "TikTok описание",
-        "folder_path": "Dropbox Path"
+        "tiktok_description": "TikTok описание"
       }
     },
-    "style_fixed": "minimalism"
+    "style_fixed": "minimalism",
+    "publish_times_msk": ["11:00", "18:00", "21:00"]
+  },
+  "pair3": {
+    "id": "pair3",
+    "label": "Инста3 + TikTok3 (Excalibur sketch neon / BORDO — отдельные Zernio API)",
+    "instagram_account": "@morozova_natalia_psy",
+    "tiktok_account": "@psy_morozova_",
+    "zernio_instagram_account_id": "6a70613ddf17280d93060b44",
+    "zernio_tiktok_account_id": "6a7063ecdf17280d9306f184",
+    "zernio_instagram_api_key_env": "ZERNIO_PAIR3_INSTAGRAM_API_KEY",
+    "zernio_tiktok_api_key_env": "ZERNIO_PAIR3_TIKTOK_API_KEY",
+    "dropbox_root": "/Content_Plan/Pair3",
+    "airtable": {
+      "base_id": "appQTNsDMuodYyp34",
+      "table_id": "tblNv5eMi1BXbu4Tq",
+      "fields": {
+        "name": "Name",
+        "instagram_caption": "Описание карусели",
+        "tiktok_title": "TikTok заголовок",
+        "tiktok_description": "TikTok описание"
+      }
+    },
+    "style_fixed": "excalibur-sketch-collage-pair3",
+    "publish_times_msk": ["12:00", "19:00", "22:00"]
   }
 }

@@ -1,0 +1,26 @@
+{
+  "name": "Karuselka Publish pair2 11:00 MSK",
+  "description": "Автопубликация 1 карусели (pair2) в 11:00 MSK (cron UTC).",
+  "workflow": {
+    "triggers": [
+      {
+        "cron": {
+          "cron": "0 8 * * *"
+        }
+      }
+    ],
+    "actions": [],
+    "prompts": [
+      "Ты — Cloud Agent доставщик каруселей для проекта karuselka-publish (репозиторий nmorozoff/Karuselka-Publish).\nТы не генерируешь слайды, не пишешь caption и не вызываешь Kie/Grok.\n\nПара: **pair2**. Лимит: 1 карусель.\n\nОбязательно:\n1. Прочитай `.cursor/karuselka-publish-handoff.md`\n2. `python3 scripts/materialize_cloud_env.py --check`\n3. Если preflight не проходит — `python3 scripts/notify_max.py --text \"❌ Preflight pair2: <ошибка>\"` и stop.\n4. `python3 scripts/publish_status.py --pair pair2`\n   - Если ready = 0 — `python3 scripts/notify_max.py --text \"📭 Очередь pair2 пуста\"` и stop.\n5. `python3 scripts/publish_worker.py --pair pair2 --limit 1 --dry-run-first`\n6. Прочитай `publish-memory/output/worker-last-run.json`.\n   - Если `aborted: true` — отчёт в Макс с причиной и stop.\n   - Если `status: error` — `python3 scripts/notify_max.py --result-file publish-memory/output/worker-last-run.json --pair pair2` и stop.\n7. При успехе воркер уже отправил отчёт в Макс. Опционально: `python3 scripts/publish_status.py --pair pair2` и итог в Макс.\n\nКонтракт: `shared/queue-contract.md`."
+    ],
+    "model": "",
+    "gitConfig": {
+      "repo": "nmorozoff/Karuselka-Publish",
+      "branch": "main"
+    },
+    "memoryEnabled": false,
+    "agentOptions": {
+      "skipInstall": false
+    }
+  }
+}
