@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build Cursor Automation prefill JSON for scheduled publish jobs (3 pairs × 3 times)."""
+"""Build automation artifacts: plain .txt instructions + optional workflow JSON."""
 
 from __future__ import annotations
 
@@ -8,9 +8,11 @@ from pathlib import Path
 
 REPO = "nmorozoff/Karuselka-Publish"
 BRANCH = "main"
-OUT = Path(__file__).resolve().parent / "workflows"
+ROOT = Path(__file__).resolve().parent
+OUT_JSON = ROOT / "workflows"
+OUT_TXT = ROOT / "instructions"
 
-# Cron UTC = MSK − 3
+# Cron UTC = MSK - 3
 JOBS = [
     ("pair1", "10:00", "0 7 * * *", "karuselka-publish-pair1-1000"),
     ("pair1", "17:00", "0 14 * * *", "karuselka-publish-pair1-1700"),
@@ -23,59 +25,111 @@ JOBS = [
     ("pair3", "22:00", "0 19 * * *", "karuselka-publish-pair3-2200"),
 ]
 
-
-def prompt(pair: str) -> str:
-    return f"""Ты — Cloud Agent доставщик каруселей (karuselka-publish, репозиторий nmorozoff/Karuselka-Publish).
-Не генерируешь слайды, caption, Kie/Grok.
-
-Пара: **{pair}**. Лимит: 1 карусель за run.
-
-## Правило №1 — не сдаваться на первой ошибке
-
-При любой проблеме: диагностика → retry (если уместно) → `publish_incident.py` → продолжай run → **Fixic в конце**.
-
-Запрещено: увидел ошибку и сразу stop без инцидента и без Fixic.
-
-## Фаза A — Preflight
-
-1. Прочитай `.cursor/karuselka-publish-handoff.md` и `deploy/cursor-automation/CLOUD_AGENT_PROMPT.md`
-2. `python3 scripts/materialize_cloud_env.py --check`
-   - fail → `python3 scripts/materialize_cloud_env.py` → повтори check (1 раз)
-   - снова fail → `python3 scripts/publish_incident.py --pair {pair} --stage preflight --error "<текст>"` → иди в Fixic
-
-## Фаза B — Очередь
-
-3. `WORKER_STATE_BACKEND=dropbox WORKER_STATE_DROPBOX_PATH=/Content_Plan/.karuselka/worker-state.json python3 scripts/publish_status.py --pair {pair}`
-4. ready=0 и failed>0 → прочитай failed в worker-state, попробуй `python3 scripts/publish_worker.py --pair {pair} --retry-failed --limit 1 --dry-run-first` (1 раз)
-5. ready=0 и failed=0 → `python3 scripts/notify_max.py --text "📭 Очередь {pair} пуста"` → **Fixic** (проверь cron/automation) → stop
-
-## Фаза C — Публикация
-
-6. `WORKER_STATE_BACKEND=dropbox WORKER_STATE_DROPBOX_PATH=/Content_Plan/.karuselka/worker-state.json python3 scripts/publish_worker.py --pair {pair} --limit 1 --dry-run-first`
-7. Прочитай `publish-memory/output/worker-last-run.json`
-   - `aborted: true` → incident + диагностика (Dropbox path, слайды, secrets) → retry dry-run на **следующей** ready карусели если есть
-   - `status: error` → `python3 scripts/publish_incident.py --pair {pair} --stage publish --error "<текст>" --carousel "<name>"` → `notify_max.py --result-file ...` → retry failed или следующую ready (макс 1 retry)
-   - success → проверь отчёт Макс: Instagram/TikTok не должны быть `not_attempted` при реальной публикации; иначе incident stage=notify
-
-## Фаза D — Fixic (обязательно при любом инциденте)
-
-8. Прочитай `deploy/cursor-automation/PUBLISH_FIXIC.md`
-9. `python3 scripts/publish_incident.py --list-open`
-10. Почини код/скрипты/промпты в репозитории (минимальный diff), `py_compile` изменённых файлов
-11. Закрой INC (`status: fixed`) в `publish-memory/pipeline-fix-queue.md` или `needs-human`
-12. Итог в Макс: `python3 scripts/notify_max.py --text "🔧 Fixic {pair}: ..."`
-
-Контракт: `shared/queue-contract.md`."""
+ENV_PREFIX = (
+    "WORKER_STATE_BACKEND=dropbox "
+    "WORKER_STATE_DROPBOX_PATH=/Content_Plan/.karuselka/worker-state.json"
+)
 
 
-def build(pair: str, time_msk: str, cron: str, slug: str) -> dict:
+def agent_instruction(pair: str) -> str:
+    return f"""Ты Cloud Agent доставщик каруселей karuselka-publish.
+Репозиторий: nmorozoff/Karuselka-Publish
+Не генерируешь слайды, caption, Kie, Grok.
+
+Пара: {pair}
+Лимит: 1 карусель за run.
+
+ПРАВИЛО: при ошибке не останавливайся сразу.
+Диагностика, retry если уместно, publish_incident.py, продолжай run, Fixic в конце.
+Запрещено: увидел ошибку и stop без инцидента и без Fixic.
+
+ФАЗА A PREFLIGHT
+1. Прочитай .cursor/karuselka-publish-handoff.md
+2. Прочитай deploy/cursor-automation/CLOUD_AGENT_PROMPT.md
+3. python3 scripts/materialize_cloud_env.py --check
+   если fail: python3 scripts/materialize_cloud_env.py и повтори check один раз
+   если снова fail: python3 scripts/publish_incident.py --pair {pair} --stage preflight --error "текст ошибки"
+   затем Fixic
+
+ФАЗА B ОЧЕРЕДЬ
+4. {ENV_PREFIX} python3 scripts/publish_status.py --pair {pair}
+5. если ready=0 и failed больше 0:
+   прочитай failed в worker-state
+   попробуй один раз:
+   {ENV_PREFIX} python3 scripts/publish_worker.py --pair {pair} --retry-failed --limit 1 --dry-run-first
+6. если ready=0 и failed=0:
+   python3 scripts/notify_max.py --text "Очередь {pair} пуста"
+   Fixic проверь cron и automation
+   stop
+
+ФАЗА C ПУБЛИКАЦИЯ
+7. {ENV_PREFIX} python3 scripts/publish_worker.py --pair {pair} --limit 1 --dry-run-first
+8. Прочитай publish-memory/output/worker-last-run.json
+   если aborted true: incident, диагностика Dropbox path и слайды, retry dry-run на следующей ready карусели если есть
+   если status error:
+     python3 scripts/publish_incident.py --pair {pair} --stage publish --error "текст" --carousel "имя"
+     python3 scripts/notify_max.py --result-file publish-memory/output/worker-last-run.json --pair {pair}
+     один retry failed или следующей ready
+   если success:
+     проверь отчет Макс
+     Instagram и TikTok не должны быть not_attempted при реальной публикации
+     иначе incident stage notify
+
+ФАЗА D FIXIC обязательно при любом инциденте
+9. Прочитай deploy/cursor-automation/PUBLISH_FIXIC.md
+10. python3 scripts/publish_incident.py --list-open
+11. Почини код и скрипты в репозитории минимальным diff
+12. py_compile на измененных py файлах
+13. Закрой INC в publish-memory/pipeline-fix-queue.md status fixed или needs-human
+14. Итог в Макс:
+    python3 scripts/notify_max.py --text "Fixic {pair}: краткий итог"
+
+Контракт: shared/queue-contract.md
+"""
+
+
+def schedule_lines() -> str:
+    lines = [
+        "Karuselka Publish — расписание automations",
+        "",
+        "Общие настройки для всех 9:",
+        "Repository: nmorozoff/Karuselka-Publish",
+        "Branch: main",
+        "Compute: Cloud Agent",
+        "Trigger: Schedule",
+        "Memory: Off",
+        "",
+        "Agents Instruction: скопируй целиком файл instructions/pairN.txt (см. ниже)",
+        "",
+        "Если cron в UTC (MSK минус 3 часа):",
+        "",
+    ]
+    for pair, time_msk, cron, slug in JOBS:
+        lines.append(f"{slug}  pair={pair}  MSK={time_msk}  cron_UTC={cron}")
+    lines.extend(
+        [
+            "",
+            "Если timezone Europe/Moscow — ставь время MSK напрямую.",
+            "",
+            "Файлы инструкций агента (copy-paste в Agents Instruction):",
+            "instructions/pair1.txt  — для всех трех слотов pair1",
+            "instructions/pair2.txt  — для всех трех слотов pair2",
+            "instructions/pair3.txt  — для всех трех слотов pair3",
+            "",
+            "Пересобрать: python3 deploy/cursor-automation/build-workflows.py",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def build_json(pair: str, time_msk: str, cron: str, slug: str) -> dict:
     return {
         "name": f"Karuselka Publish {pair} {time_msk} MSK",
-        "description": f"Автопубликация 1 карусели ({pair}) в {time_msk} MSK (cron UTC). Resilient + Fixic.",
+        "description": f"Автопубликация 1 карусели ({pair}) в {time_msk} MSK (cron UTC).",
         "workflow": {
             "triggers": [{"cron": {"cron": cron}}],
             "actions": [],
-            "prompts": [prompt(pair)],
+            "prompts": [agent_instruction(pair)],
             "model": "",
             "gitConfig": {"repo": REPO, "branch": BRANCH},
             "memoryEnabled": False,
@@ -85,15 +139,43 @@ def build(pair: str, time_msk: str, cron: str, slug: str) -> dict:
 
 
 def main() -> None:
-    OUT.mkdir(parents=True, exist_ok=True)
+    OUT_TXT.mkdir(parents=True, exist_ok=True)
+    OUT_JSON.mkdir(parents=True, exist_ok=True)
+
+    for pair in ("pair1", "pair2", "pair3"):
+        (OUT_TXT / f"{pair}.txt").write_text(agent_instruction(pair), encoding="utf-8")
+
+    (OUT_TXT / "SCHEDULE.txt").write_text(schedule_lines(), encoding="utf-8")
+
     index = []
     for pair, time_msk, cron, slug in JOBS:
-        data = build(pair, time_msk, cron, slug)
-        path = OUT / f"{slug}.json"
+        data = build_json(pair, time_msk, cron, slug)
+        path = OUT_JSON / f"{slug}.json"
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        index.append({"id": slug, "pair": pair, "time_msk": time_msk, "cron": cron, "file": path.name})
-    (OUT / "index.json").write_text(json.dumps(index, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({"written": len(index), "dir": str(OUT)}, ensure_ascii=False, indent=2))
+        index.append(
+            {
+                "id": slug,
+                "pair": pair,
+                "time_msk": time_msk,
+                "cron": cron,
+                "instruction_file": f"instructions/{pair}.txt",
+                "json_file": path.name,
+            }
+        )
+    (OUT_JSON / "index.json").write_text(json.dumps(index, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    print(
+        json.dumps(
+            {
+                "instructions": str(OUT_TXT),
+                "workflows": str(OUT_JSON),
+                "pairs": 3,
+                "jobs": len(JOBS),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":

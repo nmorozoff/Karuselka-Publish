@@ -1,0 +1,31 @@
+Karuselka Publish — расписание automations
+
+Общие настройки для всех 9:
+Repository: nmorozoff/Karuselka-Publish
+Branch: main
+Compute: Cloud Agent
+Trigger: Schedule
+Memory: Off
+
+Agents Instruction: скопируй целиком файл instructions/pairN.txt (см. ниже)
+
+Если cron в UTC (MSK минус 3 часа):
+
+karuselka-publish-pair1-1000  pair=pair1  MSK=10:00  cron_UTC=0 7 * * *
+karuselka-publish-pair1-1700  pair=pair1  MSK=17:00  cron_UTC=0 14 * * *
+karuselka-publish-pair1-2000  pair=pair1  MSK=20:00  cron_UTC=0 17 * * *
+karuselka-publish-pair2-1100  pair=pair2  MSK=11:00  cron_UTC=0 8 * * *
+karuselka-publish-pair2-1800  pair=pair2  MSK=18:00  cron_UTC=0 15 * * *
+karuselka-publish-pair2-2100  pair=pair2  MSK=21:00  cron_UTC=0 18 * * *
+karuselka-publish-pair3-1200  pair=pair3  MSK=12:00  cron_UTC=0 9 * * *
+karuselka-publish-pair3-1900  pair=pair3  MSK=19:00  cron_UTC=0 16 * * *
+karuselka-publish-pair3-2200  pair=pair3  MSK=22:00  cron_UTC=0 19 * * *
+
+Если timezone Europe/Moscow — ставь время MSK напрямую.
+
+Файлы инструкций агента (copy-paste в Agents Instruction):
+instructions/pair1.txt  — для всех трех слотов pair1
+instructions/pair2.txt  — для всех трех слотов pair2
+instructions/pair3.txt  — для всех трех слотов pair3
+
+Пересобрать: python3 deploy/cursor-automation/build-workflows.py
