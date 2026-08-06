@@ -515,6 +515,14 @@ def process_record(
     hook_video: str | None = media["hook_video"]
     has_video = bool(hook_video)
 
+    slide_count = media["expected"]
+    send_count = (
+        min(slide_count, EXPECTED_IMAGE_SLIDES)
+        if EXPECTED_IMAGE_SLIDES > 0
+        else slide_count
+    )
+    trimmed_paths = slide_paths[:send_count]
+
     if dry_run:
         mode = "mixed" if has_video else "photo_carousel"
         return {
@@ -527,10 +535,11 @@ def process_record(
             "zernio_tiktok_account_id": tt_acc,
             "mode": mode,
             "images": len(slide_paths),
+            "images_sent": len(trimmed_paths),
             "hook_video": hook_video,
         }
 
-    image_urls = [ensure_shared_link(p, dropbox_token) for p in slide_paths]
+    image_urls = [ensure_shared_link(p, dropbox_token) for p in trimmed_paths]
     if tiktok_only:
         tt_payload = build_tiktok_payload(fields, image_urls, tt_acc)
         result: dict[str, Any] = {

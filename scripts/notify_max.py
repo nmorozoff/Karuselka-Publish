@@ -28,6 +28,16 @@ def main() -> None:
     if args.result_file:
         path = Path(args.result_file)
         result = json.loads(path.read_text(encoding="utf-8"))
+        if result.get("errors") and not result.get("results"):
+            err = result["errors"][0]
+            send_message(
+                f"🚀 Karuselka Publish — {args.pair}\n"
+                f"Папка: {err.get('name', 'unknown')}\n"
+                f"❌ Ошибка: {err.get('error', 'unknown')}\n"
+                f"Следующий: {args.next_folder}"
+            )
+            print("OK")
+            return
         # При batch-run берём первый результат; иначе сам result
         record = result.get("results", [result])[0] if result.get("results") else result
         pair_label = args.pair
