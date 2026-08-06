@@ -256,10 +256,17 @@ def build_instagram_images_payload(fields: dict, image_urls: list[str], account_
 
 
 def build_instagram_mixed_payload(
-    fields: dict, hook_video_url: str, image_urls: list[str], account_id: str
+    fields: dict,
+    hook_video_url: str,
+    image_urls: list[str],
+    account_id: str,
+    *,
+    image_start_index: int = 1,
 ) -> dict:
-    """Instagram: video hook + остальные PNG."""
-    rest = image_urls[1:] if len(image_urls) > 1 else []
+    """Instagram: video hook + slide-02..06 PNG (skip slide-01.png by default)."""
+    rest = image_urls[image_start_index:]
+    if len(rest) > 5:
+        rest = rest[:5]
     media: list[dict[str, str]] = [{"type": "video", "url": hook_video_url}]
     media.extend({"type": "image", "url": u} for u in rest)
     return {
@@ -294,6 +301,44 @@ def build_tiktok_payload(fields: dict, image_urls: list[str], account_id: str) -
         },
         "publishNow": True,
     }
+
+
+def _zernio_response_failed(res: dict[str, Any]) -> bool:
+    return bool(res.get("failed") or res.get("error"))
+
+
+def _try_post_zernio(api_key: str, body: dict | str, *, retries: int = 1) -> dict[str, Any]:
+    try:
+        return post_zernio(api_key, body, retries=retries)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": str(exc), "failed": True}
+
+
+def _post_instagram_mixed(
+    fields: dict,
+    hook_video_url: str,
+    image_urls: list[str],
+    account_id: str,
+    api_key: str,
+) -> dict[str, Any]:
+    """Mixed IG post with aspect-ratio fallback (skip slide-02.png)."""
+    start_indices = [1]
+    if len(image_urls) > 2:
+        start_indices.append(2)
+    last: dict[str, Any] = {"error": "instagram mixed post failed", "failed": True}
+    for idx in start_indices:
+        payload = build_instagram_mixed_payload(
+            fields, hook_video_url, image_urls, account_id, image_start_index=idx
+        )
+        last = _try_post_zernio(api_key, payload)
+        if not _zernio_response_failed(last):
+            if idx > 1:
+                last["aspect_ratio_fallback"] = True
+            return last
+        err = str(last.get("error", "")).lower()
+        if "aspect ratio" not in err:
+            return last
+    return last
 
 
 def post_zernio(api_key: str, body: dict | str, *, dry_run: bool = False, retries: int = 1) -> dict:
@@ -533,33 +578,67 @@ def process_record(
     image_urls = [ensure_shared_link(p, dropbox_token) for p in slide_paths]
     if tiktok_only:
         tt_payload = build_tiktok_payload(fields, image_urls, tt_acc)
+        tt_res = _try_post_zernio(tt_key, tt_payload)
+        if _zernio_response_failed(tt_res):
+            raise RuntimeError(f"TikTok: {tt_res.get('error', 'unknown')}")
         result: dict[str, Any] = {
             "name": name,
-            "tiktok": post_zernio(tt_key, tt_payload),
+            "tiktok": tt_res,
             "mode": "tiktok_only",
         }
     elif has_video:
         assert hook_video is not None
         video_url = ensure_shared_link(hook_video, dropbox_token)
-        ig_payload = build_instagram_mixed_payload(fields, video_url, image_urls, ig_acc)
         tt_payload = build_tiktok_payload(fields, image_urls, tt_acc)
+        ig_res = _post_instagram_mixed(fields, video_url, image_urls, ig_acc, ig_key)
+        tt_res = _try_post_zernio(tt_key, tt_payload)
+        ig_ok = not _zernio_response_failed(ig_res)
+        tt_ok = not _zernio_response_failed(tt_res)
+        if not ig_ok and not tt_ok:
+            raise RuntimeError(
+                f"Instagram: {ig_res.get('error', 'unknown')}; TikTok: {tt_res.get('error', 'unknown')}"
+            )
         result = {
             "name": name,
             "airtable_id": rec["id"],
             "mode": "mixed",
-            "instagram": post_zernio(ig_key, ig_payload),
-            "tiktok": post_zernio(tt_key, tt_payload),
+            "instagram": ig_res,
+            "tiktok": tt_res,
         }
+        if not ig_ok or not tt_ok:
+            result["partial"] = True
+            parts = []
+            if not ig_ok:
+                parts.append(f"instagram: {ig_res.get('error', 'unknown')}")
+            if not tt_ok:
+                parts.append(f"tiktok: {tt_res.get('error', 'unknown')}")
+            result["partial_error"] = "; ".join(parts)
     else:
         ig_payload = build_instagram_photo_payload(fields, image_urls, ig_acc)
         tt_payload = build_tiktok_payload(fields, image_urls, tt_acc)
+        ig_res = _try_post_zernio(ig_key, ig_payload)
+        tt_res = _try_post_zernio(tt_key, tt_payload)
+        ig_ok = not _zernio_response_failed(ig_res)
+        tt_ok = not _zernio_response_failed(tt_res)
+        if not ig_ok and not tt_ok:
+            raise RuntimeError(
+                f"Instagram: {ig_res.get('error', 'unknown')}; TikTok: {tt_res.get('error', 'unknown')}"
+            )
         result = {
             "name": name,
             "airtable_id": rec["id"],
             "mode": "photo_carousel",
-            "instagram": post_zernio(ig_key, ig_payload),
-            "tiktok": post_zernio(tt_key, tt_payload),
+            "instagram": ig_res,
+            "tiktok": tt_res,
         }
+        if not ig_ok or not tt_ok:
+            result["partial"] = True
+            parts = []
+            if not ig_ok:
+                parts.append(f"instagram: {ig_res.get('error', 'unknown')}")
+            if not tt_ok:
+                parts.append(f"tiktok: {tt_res.get('error', 'unknown')}")
+            result["partial_error"] = "; ".join(parts)
 
     if not dry_run:
         try:
@@ -586,7 +665,7 @@ def process_record(
             if "max_error" not in result:
                 result["max_error"] = str(exc)
 
-    if not skip_cleanup:
+    if not skip_cleanup and not result.get("partial"):
         for label, key in (("instagram", "instagram"), ("tiktok", "tiktok")):
             if key in result:
                 assert_zernio_ok(result[key], label)
@@ -664,13 +743,25 @@ def run_publish_batch(
                 tiktok_only=tiktok_only,
             )
             if not dry_run:
-                published.add(carousel_name)
-                state[_published_state_key(accounts_pair_id)] = sorted(published)
-                state.get("failed", {}).pop(carousel_name, None)
-                state.setdefault("last_run", {})[carousel_name] = {
-                    "at": datetime.now(timezone.utc).isoformat(),
-                    "ok": True,
-                }
+                if res.get("partial"):
+                    state.setdefault("failed", {})[carousel_name] = {
+                        "at": datetime.now(timezone.utc).isoformat(),
+                        "error": res.get("partial_error", "partial publish"),
+                        "partial": True,
+                    }
+                    state.setdefault("last_run", {})[carousel_name] = {
+                        "at": datetime.now(timezone.utc).isoformat(),
+                        "ok": False,
+                        "partial": True,
+                    }
+                else:
+                    published.add(carousel_name)
+                    state[_published_state_key(accounts_pair_id)] = sorted(published)
+                    state.get("failed", {}).pop(carousel_name, None)
+                    state.setdefault("last_run", {})[carousel_name] = {
+                        "at": datetime.now(timezone.utc).isoformat(),
+                        "ok": True,
+                    }
             results.append(res)
         except Exception as exc:  # noqa: BLE001
             err_text = str(exc)
@@ -699,10 +790,13 @@ def run_publish_batch(
     if not dry_run:
         save_state(state, dropbox_token if os.environ.get("WORKER_STATE_BACKEND") == "dropbox" else None)
 
+    partial_results = [r for r in results if r.get("partial")]
     if not results and not errors:
         status = "empty"
-    elif results and not errors:
+    elif results and not errors and not partial_results:
         status = "ok"
+    elif results and not errors and partial_results:
+        status = "partial"
     elif results:
         status = "partial"
     else:
