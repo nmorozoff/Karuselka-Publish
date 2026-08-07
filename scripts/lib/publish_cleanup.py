@@ -12,17 +12,42 @@ def assert_zernio_ok(res: dict[str, Any], platform: str) -> None:
     if res.get("dry_run"):
         return
     if res.get("error") or res.get("errors"):
-        raise RuntimeError(f"Zernio {platform} error: {res}")
+        raise RuntimeError(f"Zernio {platform} error: {_zernio_error_summary(res)}")
     post_id = res.get("_id") or res.get("id")
     if post_id:
         return
     msg = str(res.get("message") or res.get("status") or "")
     if msg and any(x in msg.lower() for x in ("error", "fail", "invalid")):
-        raise RuntimeError(f"Zernio {platform} rejected: {res}")
+        raise RuntimeError(f"Zernio {platform} rejected: {_zernio_error_summary(res)}")
     if res.get("post") and isinstance(res["post"], dict) and res["post"].get("_id"):
+        post = res["post"]
+        for plat in post.get("platforms") or []:
+            if not isinstance(plat, dict):
+                continue
+            ps = str(plat.get("status") or "").lower()
+            if ps in ("failed", "error"):
+                err = plat.get("errorMessage") or plat.get("error") or msg
+                raise RuntimeError(f"Zernio {platform} error: {err}")
         return
     if not res:
         raise RuntimeError(f"Zernio {platform}: empty response")
+
+
+def _zernio_error_summary(res: dict[str, Any]) -> str:
+    """Краткое сообщение об ошибке Zernio без полного JSON."""
+    post = res.get("post")
+    if isinstance(post, dict):
+        for plat in post.get("platforms") or []:
+            if not isinstance(plat, dict):
+                continue
+            err = plat.get("errorMessage") or plat.get("error")
+            if err:
+                return str(err)[:500]
+    for key in ("error", "message", "detail"):
+        val = res.get(key)
+        if val:
+            return str(val)[:500]
+    return str(res)[:500]
 
 
 def cleanup_carousel_assets(
