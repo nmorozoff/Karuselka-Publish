@@ -240,7 +240,49 @@ def list_media_bundle(token: str, dropbox_folder: str) -> dict[str, Any]:
     }
 
 
-def build_instagram_photo_payload(fields: dict, image_urls: list[str], account_id: str) -> dict:
+IG_MIN_ASPECT = 0.75
+IG_MAX_ASPECT = 1.91
+
+
+def _png_dimensions_from_bytes(header: bytes) -> tuple[int, int]:
+    if len(header) < 24 or header[:8] != b"\x89PNG\r\n\x1a\n":
+        raise RuntimeError("Not a PNG file")
+    width = int.from_bytes(header[16:20], "big")
+    height = int.from_bytes(header[20:24], "big")
+    return width, height
+
+
+def _dropbox_png_dimensions(token: str, path: str) -> tuple[int, int]:
+    req = urllib.request.Request(
+        "https://content.dropboxapi.com/2/files/download",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Dropbox-API-Arg": json.dumps({"path": path}),
+            "Range": "bytes=0-23",
+        },
+        method="POST",
+    )
+    with urlopen(req, timeout=60) as resp:
+        return _png_dimensions_from_bytes(resp.read(24))
+
+
+def validate_instagram_image_slides(token: str, image_paths: list[str]) -> None:
+    """Fail fast when PNG aspect ratio is outside Instagram feed limits."""
+    for path in image_paths:
+        width, height = _dropbox_png_dimensions(token, path)
+        if height <= 0:
+            raise RuntimeError(f"Invalid image dimensions for {Path(path).name}: {width}x{height}")
+        ratio = width / height
+        if ratio < IG_MIN_ASPECT or ratio > IG_MAX_ASPECT:
+            max_h = int(width / IG_MIN_ASPECT)
+            raise RuntimeError(
+                f"Instagram aspect ratio for {Path(path).name}: {width}x{height} "
+                f"({ratio:.3f}:1). Allowed {IG_MIN_ASPECT:.2f}–{IG_MAX_ASPECT:.2f}. "
+                f"Max height for {width}px width is {max_h}px (crop to 4:5). "
+                "Re-export from factory."
+            )
+
+
     """Instagram photo carousel — все PNG (нет hook-видео)."""
     return {
         "content": (fields.get("Описание карусели") or "")[:2200],
@@ -514,6 +556,9 @@ def process_record(
     slide_paths: list[str] = media["images"]
     hook_video: str | None = media["hook_video"]
     has_video = bool(hook_video)
+
+    ig_image_paths = slide_paths[1:] if has_video else slide_paths
+    validate_instagram_image_slides(dropbox_token, ig_image_paths)
 
     if dry_run:
         mode = "mixed" if has_video else "photo_carousel"
