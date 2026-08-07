@@ -296,7 +296,7 @@ def build_tiktok_payload(fields: dict, image_urls: list[str], account_id: str) -
     }
 
 
-def post_zernio(api_key: str, body: dict | str, *, dry_run: bool = False, retries: int = 1) -> dict:
+def post_zernio(api_key: str, body: dict | str, *, dry_run: bool = False, retries: int = 2) -> dict:
     body_json = body if isinstance(body, str) else json.dumps(body, ensure_ascii=False)
     if dry_run:
         return {"dry_run": True, "platforms": json.loads(body_json).get("platforms")}
@@ -548,17 +548,19 @@ def process_record(
             "airtable_id": rec["id"],
             "mode": "mixed",
             "instagram": post_zernio(ig_key, ig_payload),
-            "tiktok": post_zernio(tt_key, tt_payload),
+            "tiktok": post_zernio(tt_key, tt_payload, retries=2),
         }
     else:
         ig_payload = build_instagram_photo_payload(fields, image_urls, ig_acc)
         tt_payload = build_tiktok_payload(fields, image_urls, tt_acc)
+        ig_result = post_zernio(ig_key, ig_payload)
+        time.sleep(5)
         result = {
             "name": name,
             "airtable_id": rec["id"],
             "mode": "photo_carousel",
-            "instagram": post_zernio(ig_key, ig_payload),
-            "tiktok": post_zernio(tt_key, tt_payload),
+            "instagram": ig_result,
+            "tiktok": post_zernio(tt_key, tt_payload, retries=2),
         }
 
     if not dry_run:
