@@ -328,6 +328,33 @@ def post_zernio(api_key: str, body: dict | str, *, dry_run: bool = False, retrie
     raise last_exc or RuntimeError("post_zernio failed")
 
 
+def _post_zernio_safe(label: str, api_key: str, payload: dict) -> tuple[dict | None, str | None]:
+    """Post to Zernio; return (response, error). Never raises."""
+    try:
+        return post_zernio(api_key, payload), None
+    except Exception as exc:  # noqa: BLE001
+        return None, f"{label}: {exc}"
+
+
+def _publish_both_platforms(
+    *,
+    ig_key: str,
+    tt_key: str,
+    ig_payload: dict,
+    tt_payload: dict,
+) -> tuple[dict[str, Any], list[str]]:
+    """Publish Instagram and TikTok independently; TikTok is not blocked by IG failure."""
+    ig_res, ig_err = _post_zernio_safe("instagram", ig_key, ig_payload)
+    tt_res, tt_err = _post_zernio_safe("tiktok", tt_key, tt_payload)
+    result: dict[str, Any] = {}
+    if ig_res is not None:
+        result["instagram"] = ig_res
+    if tt_res is not None:
+        result["tiktok"] = tt_res
+    errors = [e for e in (ig_err, tt_err) if e]
+    return result, errors
+
+
 def _is_dropbox_missing(exc: BaseException) -> bool:
     text = str(exc).lower()
     return "409" in text or "404" in text or "not_found" in text
@@ -533,33 +560,48 @@ def process_record(
     image_urls = [ensure_shared_link(p, dropbox_token) for p in slide_paths]
     if tiktok_only:
         tt_payload = build_tiktok_payload(fields, image_urls, tt_acc)
-        result: dict[str, Any] = {
-            "name": name,
-            "tiktok": post_zernio(tt_key, tt_payload),
-            "mode": "tiktok_only",
-        }
+        tt_res, tt_err = _post_zernio_safe("tiktok", tt_key, tt_payload)
+        result: dict[str, Any] = {"name": name, "mode": "tiktok_only"}
+        if tt_res is not None:
+            result["tiktok"] = tt_res
+        if tt_err:
+            raise RuntimeError(tt_err)
     elif has_video:
         assert hook_video is not None
         video_url = ensure_shared_link(hook_video, dropbox_token)
         ig_payload = build_instagram_mixed_payload(fields, video_url, image_urls, ig_acc)
         tt_payload = build_tiktok_payload(fields, image_urls, tt_acc)
+        platform_result, platform_errors = _publish_both_platforms(
+            ig_key=ig_key, tt_key=tt_key, ig_payload=ig_payload, tt_payload=tt_payload
+        )
         result = {
             "name": name,
             "airtable_id": rec["id"],
             "mode": "mixed",
-            "instagram": post_zernio(ig_key, ig_payload),
-            "tiktok": post_zernio(tt_key, tt_payload),
+            **platform_result,
         }
+        if platform_errors:
+            result["platform_errors"] = platform_errors
+            if not platform_result:
+                raise RuntimeError("; ".join(platform_errors))
+            result["partial"] = True
     else:
         ig_payload = build_instagram_photo_payload(fields, image_urls, ig_acc)
         tt_payload = build_tiktok_payload(fields, image_urls, tt_acc)
+        platform_result, platform_errors = _publish_both_platforms(
+            ig_key=ig_key, tt_key=tt_key, ig_payload=ig_payload, tt_payload=tt_payload
+        )
         result = {
             "name": name,
             "airtable_id": rec["id"],
             "mode": "photo_carousel",
-            "instagram": post_zernio(ig_key, ig_payload),
-            "tiktok": post_zernio(tt_key, tt_payload),
+            **platform_result,
         }
+        if platform_errors:
+            result["platform_errors"] = platform_errors
+            if not platform_result:
+                raise RuntimeError("; ".join(platform_errors))
+            result["partial"] = True
 
     if not dry_run:
         try:
@@ -582,11 +624,13 @@ def process_record(
                 next_folder=next_name,
                 queue_ready=next_count,
             )
+            if result.get("partial"):
+                result["error"] = "; ".join(result.get("platform_errors") or [])
         except Exception as exc:  # noqa: BLE001
             if "max_error" not in result:
                 result["max_error"] = str(exc)
 
-    if not skip_cleanup:
+    if not skip_cleanup and not result.get("partial"):
         for label, key in (("instagram", "instagram"), ("tiktok", "tiktok")):
             if key in result:
                 assert_zernio_ok(result[key], label)
@@ -664,13 +708,34 @@ def run_publish_batch(
                 tiktok_only=tiktok_only,
             )
             if not dry_run:
-                published.add(carousel_name)
-                state[_published_state_key(accounts_pair_id)] = sorted(published)
-                state.get("failed", {}).pop(carousel_name, None)
-                state.setdefault("last_run", {})[carousel_name] = {
-                    "at": datetime.now(timezone.utc).isoformat(),
-                    "ok": True,
-                }
+                if res.get("partial"):
+                    err_text = "; ".join(res.get("platform_errors") or ["partial publish"])
+                    state.setdefault("failed", {})[carousel_name] = {
+                        "at": datetime.now(timezone.utc).isoformat(),
+                        "error": err_text,
+                        "partial": True,
+                    }
+                    try:
+                        from publish_incidents import log_incident
+
+                        log_incident(
+                            pair=accounts_pair_id,
+                            stage="publish",
+                            error=err_text,
+                            carousel=carousel_name,
+                            context={"partial": True, "platforms": list(res.keys())},
+                        )
+                    except Exception:
+                        pass
+                    errors.append({"name": carousel_name, "error": err_text})
+                else:
+                    published.add(carousel_name)
+                    state[_published_state_key(accounts_pair_id)] = sorted(published)
+                    state.get("failed", {}).pop(carousel_name, None)
+                    state.setdefault("last_run", {})[carousel_name] = {
+                        "at": datetime.now(timezone.utc).isoformat(),
+                        "ok": True,
+                    }
             results.append(res)
         except Exception as exc:  # noqa: BLE001
             err_text = str(exc)
