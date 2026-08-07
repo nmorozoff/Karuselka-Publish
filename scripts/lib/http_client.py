@@ -36,6 +36,13 @@ def _direct_opener() -> urllib.request.OpenerDirector:
     return urllib.request.build_opener(urllib.request.ProxyHandler({}), https)
 
 
+def _retry_delay(exc: Exception, attempt: int) -> float:
+    text = str(exc).lower()
+    if "429" in text or "too many requests" in text or "rate limit" in text:
+        return 60.0
+    return 0.5 * (attempt + 1)
+
+
 def urlopen(req: urllib.request.Request, *, timeout: int = 60, retries: int = 3) -> Any:
     last_err: Exception | None = None
     with _without_proxy_env():
@@ -45,7 +52,7 @@ def urlopen(req: urllib.request.Request, *, timeout: int = 60, retries: int = 3)
             except Exception as exc:  # noqa: BLE001
                 last_err = exc
                 if attempt + 1 < retries:
-                    time.sleep(0.5 * (attempt + 1))
+                    time.sleep(_retry_delay(exc, attempt))
     raise RuntimeError(f"HTTP unreachable {req.full_url}: {last_err}") from last_err
 
 
