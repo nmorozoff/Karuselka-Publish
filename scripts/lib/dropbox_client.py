@@ -153,3 +153,29 @@ def ensure_shared_link(path: str, token: str) -> str:
     if "?dl=" in url:
         return url.replace("?dl=0", "?dl=1")
     return f"{url}?dl=1" if "?" not in url else url.replace("dl=0", "dl=1")
+
+
+def get_temporary_link(path: str, token: str) -> str:
+    """Direct download URL (4h TTL). Instagram rejects shared links with application/binary."""
+    req = urllib.request.Request(
+        "https://api.dropboxapi.com/2/files/get_temporary_link",
+        data=json.dumps({"path": path}).encode(),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urlopen(req, timeout=60) as resp:
+        data = json.loads(resp.read().decode())
+    link = data.get("link")
+    if not link:
+        raise SystemExit(f"Dropbox get_temporary_link missing link for {path}")
+    return link
+
+
+def ensure_media_link(path: str, token: str) -> str:
+    """Video → temporary direct link (video/mp4); images → shared dl=1 link."""
+    if Path(path).suffix.lower() == ".mp4":
+        return get_temporary_link(path, token)
+    return ensure_shared_link(path, token)

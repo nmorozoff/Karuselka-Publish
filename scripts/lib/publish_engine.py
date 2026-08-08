@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from publish_cleanup import assert_zernio_ok, cleanup_carousel_assets
-from dropbox_client import ensure_shared_link, get_access_token
+from dropbox_client import ensure_media_link, ensure_shared_link, get_access_token
 from http_client import http_json, urlopen
 from publish_config import (
     load_runtime_env,
@@ -530,7 +530,7 @@ def process_record(
             "hook_video": hook_video,
         }
 
-    image_urls = [ensure_shared_link(p, dropbox_token) for p in slide_paths]
+    image_urls = [ensure_media_link(p, dropbox_token) for p in slide_paths]
     if tiktok_only:
         tt_payload = build_tiktok_payload(fields, image_urls, tt_acc)
         result: dict[str, Any] = {
@@ -540,7 +540,7 @@ def process_record(
         }
     elif has_video:
         assert hook_video is not None
-        video_url = ensure_shared_link(hook_video, dropbox_token)
+        video_url = ensure_media_link(hook_video, dropbox_token)
         ig_payload = build_instagram_mixed_payload(fields, video_url, image_urls, ig_acc)
         tt_payload = build_tiktok_payload(fields, image_urls, tt_acc)
         result = {

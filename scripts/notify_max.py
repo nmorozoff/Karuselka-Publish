@@ -28,13 +28,24 @@ def main() -> None:
     if args.result_file:
         path = Path(args.result_file)
         result = json.loads(path.read_text(encoding="utf-8"))
-        # При batch-run берём первый результат; иначе сам result
-        record = result.get("results", [result])[0] if result.get("results") else result
+        if result.get("results"):
+            record = result["results"][0]
+            carousel_name = record.get("name", "unknown")
+        elif result.get("errors"):
+            err_item = result["errors"][0]
+            carousel_name = err_item.get("name", "unknown")
+            record = {
+                "name": carousel_name,
+                "error": err_item.get("error", result.get("message", "publish failed")),
+            }
+        else:
+            record = result
+            carousel_name = record.get("name", "unknown")
         pair_label = args.pair
         notify_from_publish_result(
             pair_id=args.pair,
             pair_label=pair_label,
-            carousel_name=record.get("name", "unknown"),
+            carousel_name=carousel_name,
             result=record,
             next_folder=args.next_folder,
         )
