@@ -95,8 +95,29 @@ def upload_directory(local_dir: Path, dropbox_folder: str, token: str) -> int:
     return count
 
 
+def ensure_media_url(path: str, token: str) -> str:
+    """Return a direct download URL for Zernio media fetch (temporary link preferred)."""
+    req = urllib.request.Request(
+        "https://api.dropboxapi.com/2/files/get_temporary_link",
+        data=json.dumps({"path": path}).encode(),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(req, timeout=60) as resp:
+            link = json.loads(resp.read().decode()).get("link", "")
+        if link:
+            return link
+    except Exception:
+        pass
+    return ensure_shared_link(path, token)
+
+
 def ensure_shared_link(path: str, token: str) -> str:
-    """Return dl=1 URL for Zernio media fetch."""
+    """Return dl=1 shared URL (fallback when temporary link is unavailable)."""
 
     def list_links() -> str:
         req = urllib.request.Request(

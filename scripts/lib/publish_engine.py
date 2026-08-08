@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from publish_cleanup import assert_zernio_ok, cleanup_carousel_assets
-from dropbox_client import ensure_shared_link, get_access_token
+from dropbox_client import ensure_media_url, ensure_shared_link, get_access_token
 from http_client import http_json, urlopen
 from publish_config import (
     load_runtime_env,
@@ -35,6 +35,7 @@ CLOUD_RUN_URL = os.environ.get(
 TRACKS_TABLE = os.environ.get("AIRTABLE_TRACKS_TABLE_ID", "tblfLD5ET7vvp1raT")
 ZERNIO_URL = "https://zernio.com/api/v1/posts"
 ZERNIO_TIMEOUT_SEC = int(os.environ.get("ZERNIO_TIMEOUT_SEC", "600"))
+IG_TT_PAUSE_SEC = int(os.environ.get("IG_TT_PAUSE_SEC", "30"))
 RENDER_TIMEOUT_SEC = int(os.environ.get("RENDER_TIMEOUT_SEC", "1200"))
 POLL_INTERVAL_SEC = int(os.environ.get("RENDER_POLL_INTERVAL_SEC", "30"))
 EXPECTED_IMAGE_SLIDES = int(os.environ.get("EXPECTED_IMAGE_SLIDES", "6"))
@@ -319,7 +320,17 @@ def post_zernio(api_key: str, body: dict | str, *, dry_run: bool = False, retrie
             text = str(exc).lower()
             retryable = any(
                 s in text
-                for s in ("429", "500", "502", "503", "504", "rate limit", "timeout")
+                for s in (
+                    "429",
+                    "500",
+                    "502",
+                    "503",
+                    "504",
+                    "rate limit",
+                    "timeout",
+                    "fetch failed",
+                    "temporary",
+                )
             )
             if attempt < retries and retryable:
                 time.sleep(60)
@@ -468,7 +479,7 @@ def wait_for_render(
 
     videos = manifest.get("videos", [])
     ig_items = [{"type": "video", "url": v["url"]} for v in videos if v.get("url")]
-    image_urls = [ensure_shared_link(p, token) for p in payload["dropbox_image_paths"]]
+    image_urls = [ensure_media_url(p, token) for p in payload["dropbox_image_paths"]]
     fields = {
         "TikTok заголовок": payload.get("tiktok_title", ""),
         "TikTok описание": payload.get("tiktok_description", ""),
@@ -530,7 +541,7 @@ def process_record(
             "hook_video": hook_video,
         }
 
-    image_urls = [ensure_shared_link(p, dropbox_token) for p in slide_paths]
+    image_urls = [ensure_media_url(p, dropbox_token) for p in slide_paths]
     if tiktok_only:
         tt_payload = build_tiktok_payload(fields, image_urls, tt_acc)
         result: dict[str, Any] = {
@@ -540,24 +551,30 @@ def process_record(
         }
     elif has_video:
         assert hook_video is not None
-        video_url = ensure_shared_link(hook_video, dropbox_token)
+        video_url = ensure_media_url(hook_video, dropbox_token)
         ig_payload = build_instagram_mixed_payload(fields, video_url, image_urls, ig_acc)
         tt_payload = build_tiktok_payload(fields, image_urls, tt_acc)
+        ig_result = post_zernio(ig_key, ig_payload)
+        if IG_TT_PAUSE_SEC > 0:
+            time.sleep(IG_TT_PAUSE_SEC)
         result = {
             "name": name,
             "airtable_id": rec["id"],
             "mode": "mixed",
-            "instagram": post_zernio(ig_key, ig_payload),
+            "instagram": ig_result,
             "tiktok": post_zernio(tt_key, tt_payload),
         }
     else:
         ig_payload = build_instagram_photo_payload(fields, image_urls, ig_acc)
         tt_payload = build_tiktok_payload(fields, image_urls, tt_acc)
+        ig_result = post_zernio(ig_key, ig_payload)
+        if IG_TT_PAUSE_SEC > 0:
+            time.sleep(IG_TT_PAUSE_SEC)
         result = {
             "name": name,
             "airtable_id": rec["id"],
             "mode": "photo_carousel",
-            "instagram": post_zernio(ig_key, ig_payload),
+            "instagram": ig_result,
             "tiktok": post_zernio(tt_key, tt_payload),
         }
 
