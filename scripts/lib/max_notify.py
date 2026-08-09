@@ -273,7 +273,12 @@ def notify_from_publish_result(
     tt = result.get("tiktok") if isinstance(result.get("tiktok"), dict) else None
     ig_status = _zernio_platform_status(ig)
     tt_status = _zernio_platform_status(tt)
-    if ig_status in ("unknown", "not_attempted") and tt_status in ("unknown", "not_attempted"):
+    publish_never_reached_zernio = "instagram" not in result and "tiktok" not in result
+    if (
+        not publish_never_reached_zernio
+        and ig_status in ("unknown", "not_attempted")
+        and tt_status in ("unknown", "not_attempted")
+    ):
         try:
             from publish_incidents import log_incident
 
