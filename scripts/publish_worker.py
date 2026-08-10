@@ -49,6 +49,11 @@ def main() -> None:
     parser.add_argument("--tiktok-only", action="store_true")
     parser.add_argument("--include-published", action="store_true")
     parser.add_argument("--retry-failed", action="store_true", help="Повторить карусели из failed")
+    parser.add_argument(
+        "--include-needs-human",
+        action="store_true",
+        help="При --retry-failed включать spam/format/ownership (обычно бесполезно)",
+    )
     args = parser.parse_args()
 
     if args.dry_run_first:
@@ -63,6 +68,7 @@ def main() -> None:
             tiktok_only=args.tiktok_only,
             include_published=args.include_published,
             retry_failed=args.retry_failed,
+            include_needs_human=args.include_needs_human,
         )
         if dry_result.get("status") == "error":
             dry_result["mode"] = "dry_run_first"
@@ -110,6 +116,7 @@ def main() -> None:
         tiktok_only=args.tiktok_only,
         include_published=args.include_published,
         retry_failed=args.retry_failed,
+        include_needs_human=args.include_needs_human,
     )
     _write_and_print(result)
 

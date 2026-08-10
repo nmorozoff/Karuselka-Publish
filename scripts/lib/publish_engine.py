@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from publish_cleanup import assert_zernio_ok, cleanup_carousel_assets
+from publish_failure import classify_failure_message, failed_record, zernio_response_ok
 from dropbox_client import ensure_shared_link, get_access_token
 from http_client import http_json, urlopen
 from publish_config import (
@@ -35,6 +36,9 @@ CLOUD_RUN_URL = os.environ.get(
 TRACKS_TABLE = os.environ.get("AIRTABLE_TRACKS_TABLE_ID", "tblfLD5ET7vvp1raT")
 ZERNIO_URL = "https://zernio.com/api/v1/posts"
 ZERNIO_TIMEOUT_SEC = int(os.environ.get("ZERNIO_TIMEOUT_SEC", "600"))
+ZERNIO_PLATFORM_GAP_SEC = int(os.environ.get("ZERNIO_PLATFORM_GAP_SEC", "45"))
+ZERNIO_POST_RETRIES = int(os.environ.get("ZERNIO_POST_RETRIES", "3"))
+ZERNIO_RETRY_BACKOFF_SEC = int(os.environ.get("ZERNIO_RETRY_BACKOFF_SEC", "90"))
 RENDER_TIMEOUT_SEC = int(os.environ.get("RENDER_TIMEOUT_SEC", "1200"))
 POLL_INTERVAL_SEC = int(os.environ.get("RENDER_POLL_INTERVAL_SEC", "30"))
 EXPECTED_IMAGE_SLIDES = int(os.environ.get("EXPECTED_IMAGE_SLIDES", "6"))
@@ -60,6 +64,66 @@ def _load_published_set(state: dict, accounts_pair_id: str) -> set[str]:
     if isinstance(raw, list):
         return set(raw)
     return set()
+
+
+def _failed_names_for_run(state: dict, *, retry_failed: bool, include_needs_human: bool) -> set[str]:
+    """Names in failed to skip (or include when retry_failed)."""
+    if not retry_failed:
+        return set((state.get("failed") or {}).keys())
+    skip: set[str] = set()
+    for name, meta in (state.get("failed") or {}).items():
+        if not isinstance(meta, dict):
+            continue
+        if meta.get("needs_human") and not include_needs_human:
+            skip.add(name)
+        elif retry_failed and meta.get("retryable") is False and not include_needs_human:
+            skip.add(name)
+    return skip
+
+
+def _pause_between_platforms() -> None:
+    if ZERNIO_PLATFORM_GAP_SEC > 0:
+        time.sleep(ZERNIO_PLATFORM_GAP_SEC)
+
+
+def _publish_instagram_then_tiktok(
+    *,
+    ig_key: str,
+    tt_key: str,
+    ig_payload: dict,
+    tt_payload: dict,
+    name: str,
+    airtable_id: str,
+    mode: str,
+) -> dict[str, Any]:
+    instagram = post_zernio(ig_key, ig_payload)
+    _pause_between_platforms()
+    try:
+        tiktok = post_zernio(tt_key, tt_payload)
+    except Exception as tt_exc:
+        tt_err = str(tt_exc)
+        meta = classify_failure_message(tt_err)
+        if zernio_response_ok(instagram) and meta.get("needs_human"):
+            return {
+                "name": name,
+                "airtable_id": airtable_id,
+                "mode": f"{mode}_instagram_only",
+                "instagram": instagram,
+                "tiktok_skipped": tt_err[:2000],
+                "partial": True,
+                "needs_human_tiktok": True,
+                "failure_category": meta.get("category"),
+            }
+        if zernio_response_ok(instagram) and meta.get("retryable"):
+            raise RuntimeError(f"PARTIAL_IG_OK|{tt_err}") from tt_exc
+        raise
+    return {
+        "name": name,
+        "airtable_id": airtable_id,
+        "mode": mode,
+        "instagram": instagram,
+        "tiktok": tiktok,
+    }
 
 
 def _ready_records(records: list[dict], state: dict, pair_id: str) -> list[dict]:
@@ -296,12 +360,13 @@ def build_tiktok_payload(fields: dict, image_urls: list[str], account_id: str) -
     }
 
 
-def post_zernio(api_key: str, body: dict | str, *, dry_run: bool = False, retries: int = 1) -> dict:
+def post_zernio(api_key: str, body: dict | str, *, dry_run: bool = False, retries: int | None = None) -> dict:
     body_json = body if isinstance(body, str) else json.dumps(body, ensure_ascii=False)
     if dry_run:
         return {"dry_run": True, "platforms": json.loads(body_json).get("platforms")}
+    max_retries = ZERNIO_POST_RETRIES if retries is None else retries
     last_exc: Exception | None = None
-    for attempt in range(retries + 1):
+    for attempt in range(max_retries + 1):
         try:
             return http_json(
                 "POST",
@@ -319,10 +384,10 @@ def post_zernio(api_key: str, body: dict | str, *, dry_run: bool = False, retrie
             text = str(exc).lower()
             retryable = any(
                 s in text
-                for s in ("429", "500", "502", "503", "504", "rate limit", "timeout")
+                for s in ("429", "500", "502", "503", "504", "rate limit", "timeout", "too many requests")
             )
-            if attempt < retries and retryable:
-                time.sleep(60)
+            if attempt < max_retries and retryable:
+                time.sleep(ZERNIO_RETRY_BACKOFF_SEC)
                 continue
             break
     raise last_exc or RuntimeError("post_zernio failed")
@@ -498,6 +563,7 @@ def process_record(
     dry_run: bool,
     skip_cleanup: bool,
     tiktok_only: bool,
+    state: dict | None = None,
 ) -> dict[str, Any]:
     fields = rec.get("fields", {})
     name = fields.get("Name")
@@ -531,10 +597,23 @@ def process_record(
         }
 
     image_urls = [ensure_shared_link(p, dropbox_token) for p in slide_paths]
-    if tiktok_only:
+    partial = (state or {}).get("partial_published", {}).get(name) if state else None
+    resume_tiktok = bool(partial and partial.get("instagram") and not tiktok_only)
+
+    if resume_tiktok:
         tt_payload = build_tiktok_payload(fields, image_urls, tt_acc)
-        result: dict[str, Any] = {
+        result = {
             "name": name,
+            "airtable_id": rec["id"],
+            "mode": "tiktok_resume",
+            "tiktok": post_zernio(tt_key, tt_payload),
+            "instagram": {"resumed": True, "partial_at": partial.get("at")},
+        }
+    elif tiktok_only:
+        tt_payload = build_tiktok_payload(fields, image_urls, tt_acc)
+        result = {
+            "name": name,
+            "airtable_id": rec["id"],
             "tiktok": post_zernio(tt_key, tt_payload),
             "mode": "tiktok_only",
         }
@@ -543,23 +622,27 @@ def process_record(
         video_url = ensure_shared_link(hook_video, dropbox_token)
         ig_payload = build_instagram_mixed_payload(fields, video_url, image_urls, ig_acc)
         tt_payload = build_tiktok_payload(fields, image_urls, tt_acc)
-        result = {
-            "name": name,
-            "airtable_id": rec["id"],
-            "mode": "mixed",
-            "instagram": post_zernio(ig_key, ig_payload),
-            "tiktok": post_zernio(tt_key, tt_payload),
-        }
+        result = _publish_instagram_then_tiktok(
+            ig_key=ig_key,
+            tt_key=tt_key,
+            ig_payload=ig_payload,
+            tt_payload=tt_payload,
+            name=name,
+            airtable_id=rec["id"],
+            mode="mixed",
+        )
     else:
         ig_payload = build_instagram_photo_payload(fields, image_urls, ig_acc)
         tt_payload = build_tiktok_payload(fields, image_urls, tt_acc)
-        result = {
-            "name": name,
-            "airtable_id": rec["id"],
-            "mode": "photo_carousel",
-            "instagram": post_zernio(ig_key, ig_payload),
-            "tiktok": post_zernio(tt_key, tt_payload),
-        }
+        result = _publish_instagram_then_tiktok(
+            ig_key=ig_key,
+            tt_key=tt_key,
+            ig_payload=ig_payload,
+            tt_payload=tt_payload,
+            name=name,
+            airtable_id=rec["id"],
+            mode="photo_carousel",
+        )
 
     if not dry_run:
         try:
@@ -587,9 +670,14 @@ def process_record(
                 result["max_error"] = str(exc)
 
     if not skip_cleanup:
-        for label, key in (("instagram", "instagram"), ("tiktok", "tiktok")):
-            if key in result:
-                assert_zernio_ok(result[key], label)
+        partial_ig_only = bool(result.get("partial") and result.get("needs_human_tiktok"))
+        if partial_ig_only:
+            if "instagram" in result:
+                assert_zernio_ok(result["instagram"], "instagram")
+        else:
+            for label, key in (("instagram", "instagram"), ("tiktok", "tiktok")):
+                if key in result and isinstance(result.get(key), dict) and not result[key].get("resumed"):
+                    assert_zernio_ok(result[key], label)
         result["cleanup"] = cleanup_carousel_assets(
             env=env,
             queue_pair=queue_pair,
@@ -601,6 +689,37 @@ def process_record(
         )
 
     return result
+
+
+def _notify_publish_error(
+    *,
+    accounts_pair: dict,
+    carousel_name: str,
+    err_text: str,
+    env: dict[str, str],
+    dropbox_token: str,
+) -> None:
+    try:
+        from max_notify import notify_publish_complete
+
+        summary = get_queue_summary(env)
+        remaining = {pid: summary["pairs"][pid]["ready"] for pid in ("pair1", "pair2", "pair3")}
+        notify_state = load_state(
+            dropbox_token if os.environ.get("WORKER_STATE_BACKEND") == "dropbox" else None
+        )
+        next_name, next_count = queue_next_hint(
+            env, accounts_pair.get("id", "pair1"), notify_state, exclude_name=carousel_name
+        )
+        notify_publish_complete(
+            pair_id=accounts_pair.get("id", "pair1"),
+            pair_label=accounts_pair.get("label", "pair"),
+            carousel_name=carousel_name,
+            error=err_text[:1500],
+            next_folder=next_name,
+            queue_ready=next_count or remaining.get(accounts_pair.get("id", "pair1")),
+        )
+    except Exception:
+        pass
 
 
 def run_publish_batch(
@@ -615,6 +734,7 @@ def run_publish_batch(
     tiktok_only: bool = False,
     include_published: bool = False,
     retry_failed: bool = False,
+    include_needs_human: bool = False,
 ) -> dict[str, Any]:
     env = load_runtime_env()
     accounts_pair_id = accounts_pair_id or pair_id
@@ -630,7 +750,11 @@ def run_publish_batch(
     if name:
         records = [r for r in records if r.get("fields", {}).get("Name") == name]
     elif not include_published:
-        failed_names = set() if retry_failed else set(state.get("failed", {}).keys())
+        failed_names = _failed_names_for_run(
+            state,
+            retry_failed=retry_failed,
+            include_needs_human=include_needs_human,
+        )
         records = [
             r
             for r in records
@@ -662,39 +786,78 @@ def run_publish_batch(
                 dry_run=dry_run,
                 skip_cleanup=skip_cleanup,
                 tiktok_only=tiktok_only,
+                state=state,
             )
             if not dry_run:
-                published.add(carousel_name)
-                state[_published_state_key(accounts_pair_id)] = sorted(published)
-                state.get("failed", {}).pop(carousel_name, None)
-                state.setdefault("last_run", {})[carousel_name] = {
-                    "at": datetime.now(timezone.utc).isoformat(),
-                    "ok": True,
-                }
+                partial_ig = bool(res.get("partial") and res.get("needs_human_tiktok"))
+                if partial_ig and zernio_response_ok(res.get("instagram")):
+                    published.add(carousel_name)
+                    state[_published_state_key(accounts_pair_id)] = sorted(published)
+                    state.get("failed", {}).pop(carousel_name, None)
+                    state.setdefault("partial_published", {})[carousel_name] = {
+                        "at": datetime.now(timezone.utc).isoformat(),
+                        "instagram": True,
+                        "tiktok_skipped": (res.get("tiktok_skipped") or "")[:2000],
+                        "failure_category": res.get("failure_category", "tiktok_spam"),
+                        "needs_human": True,
+                    }
+                    state.setdefault("last_run", {})[carousel_name] = {
+                        "at": datetime.now(timezone.utc).isoformat(),
+                        "ok": True,
+                        "partial": True,
+                    }
+                else:
+                    published.add(carousel_name)
+                    state[_published_state_key(accounts_pair_id)] = sorted(published)
+                    state.get("failed", {}).pop(carousel_name, None)
+                    state.get("partial_published", {}).pop(carousel_name, None)
+                    state.setdefault("last_run", {})[carousel_name] = {
+                        "at": datetime.now(timezone.utc).isoformat(),
+                        "ok": True,
+                    }
             results.append(res)
         except Exception as exc:  # noqa: BLE001
             err_text = str(exc)
-            state.setdefault("failed", {})[carousel_name] = {
-                "at": datetime.now(timezone.utc).isoformat(),
-                "error": err_text,
-            }
+            if err_text.startswith("PARTIAL_IG_OK|"):
+                tt_err = err_text.split("|", 1)[1]
+                if not dry_run:
+                    state.setdefault("partial_published", {})[carousel_name] = {
+                        "at": datetime.now(timezone.utc).isoformat(),
+                        "instagram": True,
+                        "tiktok_error": tt_err[:2000],
+                    }
+                    state.setdefault("failed", {})[carousel_name] = failed_record(tt_err)
+                    state["failed"][carousel_name]["partial_instagram"] = True
+                errors.append({"name": carousel_name, "error": tt_err, "partial_instagram": True})
+            else:
+                if not dry_run:
+                    state.setdefault("failed", {})[carousel_name] = failed_record(err_text)
+                errors.append({"name": carousel_name, "error": err_text})
             try:
                 from publish_incidents import log_incident
 
                 log_incident(
                     pair=accounts_pair_id,
                     stage="publish",
-                    error=err_text,
+                    error=err_text[:4000],
                     carousel=carousel_name,
                     suggested_files=[
                         "scripts/lib/publish_engine.py",
+                        "scripts/lib/publish_failure.py",
                         "scripts/lib/publish_cleanup.py",
                         "scripts/lib/max_notify.py",
                     ],
                 )
             except Exception:
                 pass
-            errors.append({"name": carousel_name, "error": err_text})
+            if not dry_run:
+                _notify_publish_error(
+                    accounts_pair=accounts_pair,
+                    carousel_name=carousel_name,
+                    err_text=err_text,
+                    env=env,
+                    dropbox_token=dropbox_token,
+                )
 
     if not dry_run:
         save_state(state, dropbox_token if os.environ.get("WORKER_STATE_BACKEND") == "dropbox" else None)

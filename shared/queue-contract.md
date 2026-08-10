@@ -81,12 +81,17 @@ Publish-воркер ориентируется на `PUBLISH_MODE=grok_hook` + 
   "published": ["crsl_..."],
   "published_pair2": [],
   "published_pair3": [],
-  "failed": { "crsl_...": { "at": "...", "error": "..." } },
+  "failed": { "crsl_...": { "at": "...", "error": "...", "category": "rate_limit", "retryable": true } },
+  "partial_published": { "crsl_...": { "instagram": true, "tiktok_skipped": "..." } },
   "last_run": {}
 }
 ```
 
-Ошибка одной карусели → `failed`, очередь продолжается.
+Ошибка одной карусели → `failed` с `category` / `retryable` / `needs_human` (`publish_failure.py`).
+
+**Фабрика:** см. `shared/KARUSELKA-FACTORY-PUBLISH-SPEC.md` — как не генерировать aspect-ratio/spam/bad_request failed.
+
+**Очистка:** `python scripts/manage_failed_queue.py reconcile` (purge junk + clear retryable).
 
 ## Секреты (не коммитить)
 

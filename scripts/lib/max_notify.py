@@ -174,6 +174,8 @@ def build_publish_report_text(
         lines.append(f"Режим: {mode}")
         ig_status = _zernio_platform_status(instagram_result)
         tt_status = _zernio_platform_status(tiktok_result)
+        if tt_status == "failed" and tiktok_result and tiktok_result.get("status") == "skipped":
+            tt_status = "skipped (needs human)"
         lines.append(f"Instagram: {ig_status} ({_zernio_platform_detail(instagram_result)})")
         lines.append(f"TikTok: {tt_status} ({_zernio_platform_detail(tiktok_result)})")
     if queue_ready is not None and queue_ready > 0 and next_folder:
@@ -271,6 +273,9 @@ def notify_from_publish_result(
 
     ig = result.get("instagram") if isinstance(result.get("instagram"), dict) else None
     tt = result.get("tiktok") if isinstance(result.get("tiktok"), dict) else None
+    tiktok_skipped = result.get("tiktok_skipped")
+    if tiktok_skipped and not tt:
+        tt = {"error": str(tiktok_skipped)[:500], "status": "skipped"}
     ig_status = _zernio_platform_status(ig)
     tt_status = _zernio_platform_status(tt)
     if ig_status in ("unknown", "not_attempted") and tt_status in ("unknown", "not_attempted"):
