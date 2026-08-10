@@ -28,8 +28,16 @@ def main() -> None:
     if args.result_file:
         path = Path(args.result_file)
         result = json.loads(path.read_text(encoding="utf-8"))
-        # При batch-run берём первый результат; иначе сам result
-        record = result.get("results", [result])[0] if result.get("results") else result
+        if result.get("results"):
+            record = result["results"][0]
+        elif result.get("errors"):
+            err_item = result["errors"][0]
+            record = {
+                "name": err_item.get("name", "unknown"),
+                "error": err_item.get("error", "unknown error"),
+            }
+        else:
+            record = result
         pair_label = args.pair
         notify_from_publish_result(
             pair_id=args.pair,
