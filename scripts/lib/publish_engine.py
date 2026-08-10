@@ -296,7 +296,7 @@ def build_tiktok_payload(fields: dict, image_urls: list[str], account_id: str) -
     }
 
 
-def post_zernio(api_key: str, body: dict | str, *, dry_run: bool = False, retries: int = 1) -> dict:
+def post_zernio(api_key: str, body: dict | str, *, dry_run: bool = False, retries: int = 2) -> dict:
     body_json = body if isinstance(body, str) else json.dumps(body, ensure_ascii=False)
     if dry_run:
         return {"dry_run": True, "platforms": json.loads(body_json).get("platforms")}
@@ -322,7 +322,7 @@ def post_zernio(api_key: str, body: dict | str, *, dry_run: bool = False, retrie
                 for s in ("429", "500", "502", "503", "504", "rate limit", "timeout")
             )
             if attempt < retries and retryable:
-                time.sleep(60)
+                time.sleep(60 * (attempt + 1))
                 continue
             break
     raise last_exc or RuntimeError("post_zernio failed")
