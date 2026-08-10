@@ -28,8 +28,20 @@ def main() -> None:
     if args.result_file:
         path = Path(args.result_file)
         result = json.loads(path.read_text(encoding="utf-8"))
-        # При batch-run берём первый результат; иначе сам result
-        record = result.get("results", [result])[0] if result.get("results") else result
+        # Batch ok/partial: первый results[]. При status=error — errors[].
+        if result.get("results"):
+            record = result["results"][0]
+        elif result.get("errors"):
+            err0 = result["errors"][0]
+            record = {
+                "name": err0.get("name", "unknown"),
+                "error": err0.get("error", "publish failed"),
+            }
+            if err0.get("partial_instagram"):
+                record["instagram"] = {"post": {"status": "published"}}
+                record["tiktok"] = {"error": err0.get("error"), "message": err0.get("error")}
+        else:
+            record = result
         pair_label = args.pair
         notify_from_publish_result(
             pair_id=args.pair,
