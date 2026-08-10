@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
-from max_notify import notify_from_publish_result, send_message  # noqa: E402
+from max_notify import notify_from_publish_result, record_from_worker_batch, send_message  # noqa: E402
 
 
 def main() -> None:
@@ -28,13 +28,12 @@ def main() -> None:
     if args.result_file:
         path = Path(args.result_file)
         result = json.loads(path.read_text(encoding="utf-8"))
-        # При batch-run берём первый результат; иначе сам result
-        record = result.get("results", [result])[0] if result.get("results") else result
+        carousel_name, record = record_from_worker_batch(result)
         pair_label = args.pair
         notify_from_publish_result(
             pair_id=args.pair,
             pair_label=pair_label,
-            carousel_name=record.get("name", "unknown"),
+            carousel_name=carousel_name,
             result=record,
             next_folder=args.next_folder,
         )
