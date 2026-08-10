@@ -12,7 +12,7 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS / "lib"))
 
 from publish_config import MEMORY  # noqa: E402
-from publish_engine import run_publish_batch  # noqa: E402
+from publish_engine import get_queue_summary, run_publish_batch  # noqa: E402
 
 
 def _write_and_print(result: dict) -> None:
@@ -85,17 +85,23 @@ def main() -> None:
         if dry_result.get("status") == "empty":
             dry_result["mode"] = "dry_run_first"
             dry_result["aborted"] = True
-            dry_result["reason"] = "queue empty"
-            try:
-                from publish_incidents import log_incident
+            pair_summary = get_queue_summary().get("pairs", {}).get(args.pair, {})
+            failed_count = pair_summary.get("failed", 0)
+            if failed_count > 0:
+                dry_result["reason"] = "queue blocked by failed"
+                dry_result["failed_count"] = failed_count
+            else:
+                dry_result["reason"] = "queue empty"
+                try:
+                    from publish_incidents import log_incident
 
-                log_incident(
-                    pair=args.pair,
-                    stage="queue",
-                    error="queue empty at dry-run-first",
-                )
-            except Exception:
-                pass
+                    log_incident(
+                        pair=args.pair,
+                        stage="queue",
+                        error="queue empty at dry-run-first",
+                    )
+                except Exception:
+                    pass
             _write_and_print(dry_result)
             return
 

@@ -240,12 +240,19 @@ def list_media_bundle(token: str, dropbox_folder: str) -> dict[str, Any]:
     }
 
 
+def _instagram_platform(account_id: str, *, content_type: str | None = None) -> dict:
+    platform: dict[str, Any] = {"platform": "instagram", "accountId": account_id}
+    if content_type:
+        platform["platformSpecificData"] = {"contentType": content_type}
+    return platform
+
+
 def build_instagram_photo_payload(fields: dict, image_urls: list[str], account_id: str) -> dict:
     """Instagram photo carousel — все PNG (нет hook-видео)."""
     return {
         "content": (fields.get("Описание карусели") or "")[:2200],
         "mediaItems": [{"type": "image", "url": u} for u in image_urls],
-        "platforms": [{"platform": "instagram", "accountId": account_id}],
+        "platforms": [_instagram_platform(account_id)],
         "publishNow": True,
     }
 
@@ -258,14 +265,14 @@ def build_instagram_images_payload(fields: dict, image_urls: list[str], account_
 def build_instagram_mixed_payload(
     fields: dict, hook_video_url: str, image_urls: list[str], account_id: str
 ) -> dict:
-    """Instagram: video hook + остальные PNG."""
+    """Instagram: video hook + остальные PNG (9:16 → Story, иначе feed 400 от Zernio)."""
     rest = image_urls[1:] if len(image_urls) > 1 else []
     media: list[dict[str, str]] = [{"type": "video", "url": hook_video_url}]
     media.extend({"type": "image", "url": u} for u in rest)
     return {
         "content": (fields.get("Описание карусели") or "")[:2200],
         "mediaItems": media,
-        "platforms": [{"platform": "instagram", "accountId": account_id}],
+        "platforms": [_instagram_platform(account_id, content_type="story")],
         "publishNow": True,
     }
 
