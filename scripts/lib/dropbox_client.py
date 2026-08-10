@@ -153,3 +153,27 @@ def ensure_shared_link(path: str, token: str) -> str:
     if "?dl=" in url:
         return url.replace("?dl=0", "?dl=1")
     return f"{url}?dl=1" if "?" not in url else url.replace("dl=0", "dl=1")
+
+
+def ensure_temporary_link(path: str, token: str) -> str:
+    """Direct dl.dropboxusercontent.com URL (4h TTL) — для TikTok URL ownership."""
+
+    req = urllib.request.Request(
+        "https://api.dropboxapi.com/2/files/get_temporary_link",
+        data=json.dumps({"path": path}).encode(),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        text = e.read().decode("utf-8", errors="replace")
+        raise SystemExit(f"Dropbox get_temporary_link error: {text}") from e
+    link = data.get("link", "")
+    if not link:
+        raise SystemExit(f"Dropbox temporary link missing for {path}")
+    return link
