@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from publish_cleanup import assert_zernio_ok, cleanup_carousel_assets
-from dropbox_client import ensure_shared_link, get_access_token
+from dropbox_client import ensure_shared_link, ensure_temporary_link, get_access_token
 from http_client import http_json, urlopen
 from publish_config import (
     load_runtime_env,
@@ -531,8 +531,9 @@ def process_record(
         }
 
     image_urls = [ensure_shared_link(p, dropbox_token) for p in slide_paths]
+    tiktok_image_urls = [ensure_temporary_link(p, dropbox_token) for p in slide_paths]
     if tiktok_only:
-        tt_payload = build_tiktok_payload(fields, image_urls, tt_acc)
+        tt_payload = build_tiktok_payload(fields, tiktok_image_urls, tt_acc)
         result: dict[str, Any] = {
             "name": name,
             "tiktok": post_zernio(tt_key, tt_payload),
@@ -542,7 +543,7 @@ def process_record(
         assert hook_video is not None
         video_url = ensure_shared_link(hook_video, dropbox_token)
         ig_payload = build_instagram_mixed_payload(fields, video_url, image_urls, ig_acc)
-        tt_payload = build_tiktok_payload(fields, image_urls, tt_acc)
+        tt_payload = build_tiktok_payload(fields, tiktok_image_urls, tt_acc)
         result = {
             "name": name,
             "airtable_id": rec["id"],
@@ -552,7 +553,7 @@ def process_record(
         }
     else:
         ig_payload = build_instagram_photo_payload(fields, image_urls, ig_acc)
-        tt_payload = build_tiktok_payload(fields, image_urls, tt_acc)
+        tt_payload = build_tiktok_payload(fields, tiktok_image_urls, tt_acc)
         result = {
             "name": name,
             "airtable_id": rec["id"],
