@@ -16,7 +16,12 @@ from pathlib import Path
 from typing import Any
 
 from publish_cleanup import assert_zernio_ok, cleanup_carousel_assets
-from publish_failure import classify_failure_message, failed_record, zernio_response_ok
+from publish_failure import (
+    classify_failure_message,
+    failed_record,
+    parse_zernio_duplicate_error,
+    zernio_response_ok,
+)
 from dropbox_client import ensure_shared_link, get_access_token
 from http_client import http_json, urlopen
 from publish_config import (
@@ -380,6 +385,9 @@ def post_zernio(api_key: str, body: dict | str, *, dry_run: bool = False, retrie
                 timeout=ZERNIO_TIMEOUT_SEC,
             )
         except Exception as exc:  # noqa: BLE001
+            dup = parse_zernio_duplicate_error(str(exc))
+            if dup:
+                return dup
             last_exc = exc
             text = str(exc).lower()
             retryable = any(

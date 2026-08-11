@@ -36,12 +36,21 @@ def _direct_opener() -> urllib.request.OpenerDirector:
     return urllib.request.build_opener(urllib.request.ProxyHandler({}), https)
 
 
+def _retryable_http_error(exc: urllib.error.HTTPError) -> bool:
+    return exc.code == 429 or exc.code >= 500
+
+
 def urlopen(req: urllib.request.Request, *, timeout: int = 60, retries: int = 3) -> Any:
     last_err: Exception | None = None
     with _without_proxy_env():
         for attempt in range(max(1, retries)):
             try:
                 return _direct_opener().open(req, timeout=timeout)
+            except urllib.error.HTTPError as exc:
+                if not _retryable_http_error(exc) or attempt + 1 >= retries:
+                    raise
+                last_err = exc
+                time.sleep(0.5 * (attempt + 1))
             except Exception as exc:  # noqa: BLE001
                 last_err = exc
                 if attempt + 1 < retries:
