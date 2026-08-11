@@ -122,6 +122,24 @@ def _publish_instagram_then_tiktok(
         if zernio_response_ok(instagram) and meta.get("retryable"):
             raise RuntimeError(f"PARTIAL_IG_OK|{tt_err}") from tt_exc
         raise
+    if not zernio_response_ok(tiktok):
+        tt_err = json.dumps(tiktok, ensure_ascii=False)[:4000]
+        meta = classify_failure_message(tt_err)
+        if zernio_response_ok(instagram) and meta.get("needs_human"):
+            return {
+                "name": name,
+                "airtable_id": airtable_id,
+                "mode": f"{mode}_instagram_only",
+                "instagram": instagram,
+                "tiktok": tiktok,
+                "tiktok_skipped": tt_err[:2000],
+                "partial": True,
+                "needs_human_tiktok": True,
+                "failure_category": meta.get("category"),
+            }
+        if zernio_response_ok(instagram) and meta.get("retryable"):
+            raise RuntimeError(f"PARTIAL_IG_OK|{tt_err}")
+        raise RuntimeError(f"Zernio tiktok error: {tiktok}")
     return {
         "name": name,
         "airtable_id": airtable_id,
