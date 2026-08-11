@@ -84,6 +84,8 @@ def _zernio_platform_status(zernio_response: dict | None) -> str:
         return "not_attempted"
     if zernio_response.get("dry_run"):
         return "dry_run"
+    if zernio_response.get("duplicate_accepted") or zernio_response.get("resumed"):
+        return "ok"
     if zernio_response.get("error") or zernio_response.get("errors"):
         return "failed"
 
@@ -126,6 +128,11 @@ def _zernio_platform_detail(zernio_response: dict | None) -> str:
         return "—"
     if zernio_response.get("dry_run"):
         return "dry-run"
+    if zernio_response.get("duplicate_accepted"):
+        post_id = (zernio_response.get("post") or {}).get("_id")
+        return f"duplicate ok (post_id={post_id})" if post_id else "duplicate ok"
+    if zernio_response.get("resumed"):
+        return "resumed partial publish"
 
     url = _extract_post_url(zernio_response)
     if url:

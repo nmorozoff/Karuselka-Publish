@@ -9,7 +9,7 @@ from publish_config import resolve_carousel_dropbox_path
 
 
 def assert_zernio_ok(res: dict[str, Any], platform: str) -> None:
-    if res.get("dry_run"):
+    if res.get("dry_run") or res.get("duplicate_accepted"):
         return
     if res.get("error") or res.get("errors"):
         raise RuntimeError(f"Zernio {platform} error: {res}")

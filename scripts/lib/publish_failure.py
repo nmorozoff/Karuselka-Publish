@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 from typing import Any
 
 
@@ -33,8 +35,48 @@ def zernio_response_ok(res: dict[str, Any] | None) -> bool:
     return bool(post)
 
 
+def zernio_duplicate_conflict_response(text: str) -> dict[str, Any] | None:
+    """Zernio 409: same content already scheduled/posted within 24h — treat as idempotent ok."""
+    lower = text.lower()
+    if "409" not in lower:
+        return None
+    if not any(
+        x in lower
+        for x in (
+            "already scheduled",
+            "already posted",
+            "exact content is already",
+        )
+    ):
+        return None
+    payload: dict[str, Any] | None = None
+    for match in re.finditer(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", text):
+        try:
+            payload = json.loads(match.group())
+            break
+        except json.JSONDecodeError:
+            continue
+    if not payload:
+        return None
+    details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+    post_id = details.get("existingPostId") or payload.get("existingPostId")
+    if not post_id:
+        return None
+    return {
+        "post": {"_id": post_id},
+        "duplicate_accepted": True,
+        "message": str(payload.get("error") or "duplicate content accepted"),
+    }
+
+
 def classify_failure_message(text: str) -> dict[str, Any]:
     lower = text.lower()
+    if zernio_duplicate_conflict_response(text):
+        return {
+            "category": "duplicate_content",
+            "needs_human": False,
+            "retryable": False,
+        }
     if any(
         x in lower
         for x in (
