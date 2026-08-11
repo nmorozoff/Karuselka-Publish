@@ -28,16 +28,40 @@ def main() -> None:
     if args.result_file:
         path = Path(args.result_file)
         result = json.loads(path.read_text(encoding="utf-8"))
-        # При batch-run берём первый результат; иначе сам result
-        record = result.get("results", [result])[0] if result.get("results") else result
         pair_label = args.pair
-        notify_from_publish_result(
-            pair_id=args.pair,
-            pair_label=pair_label,
-            carousel_name=record.get("name", "unknown"),
-            result=record,
-            next_folder=args.next_folder,
-        )
+        if result.get("results"):
+            record = result["results"][0]
+            notify_from_publish_result(
+                pair_id=args.pair,
+                pair_label=pair_label,
+                carousel_name=record.get("name", "unknown"),
+                result=record,
+                next_folder=args.next_folder,
+            )
+        elif result.get("errors"):
+            err_entry = result["errors"][0]
+            carousel_name = err_entry.get("name", "unknown")
+            err_text = err_entry.get("error", "unknown error")
+            if err_entry.get("partial_instagram"):
+                err_text = f"partial Instagram ok; TikTok/error: {err_text}"
+            from max_notify import notify_publish_complete  # noqa: E402
+
+            notify_publish_complete(
+                pair_id=args.pair,
+                pair_label=pair_label,
+                carousel_name=carousel_name,
+                error=err_text[:1500],
+                next_folder=args.next_folder,
+            )
+        else:
+            record = result
+            notify_from_publish_result(
+                pair_id=args.pair,
+                pair_label=pair_label,
+                carousel_name=record.get("name", "unknown"),
+                result=record,
+                next_folder=args.next_folder,
+            )
         print("OK")
         return
 
