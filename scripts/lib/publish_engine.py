@@ -16,7 +16,12 @@ from pathlib import Path
 from typing import Any
 
 from publish_cleanup import assert_zernio_ok, cleanup_carousel_assets
-from publish_failure import classify_failure_message, failed_record, zernio_response_ok
+from publish_failure import (
+    classify_failure_message,
+    failed_record,
+    parse_zernio_duplicate_error,
+    zernio_response_ok,
+)
 from dropbox_client import ensure_shared_link, get_access_token
 from http_client import http_json, urlopen
 from publish_config import (
@@ -117,6 +122,24 @@ def _publish_instagram_then_tiktok(
         if zernio_response_ok(instagram) and meta.get("retryable"):
             raise RuntimeError(f"PARTIAL_IG_OK|{tt_err}") from tt_exc
         raise
+    if not zernio_response_ok(tiktok):
+        tt_err_full = json.dumps(tiktok, ensure_ascii=False)
+        meta = classify_failure_message(tt_err_full)
+        if zernio_response_ok(instagram) and meta.get("needs_human"):
+            return {
+                "name": name,
+                "airtable_id": airtable_id,
+                "mode": f"{mode}_instagram_only",
+                "instagram": instagram,
+                "tiktok": tiktok,
+                "tiktok_skipped": tt_err_full[:2000],
+                "partial": True,
+                "needs_human_tiktok": True,
+                "failure_category": meta.get("category"),
+            }
+        if zernio_response_ok(instagram) and meta.get("retryable"):
+            raise RuntimeError(f"PARTIAL_IG_OK|{tt_err_full[:4000]}")
+        raise RuntimeError(f"Zernio tiktok error: {tiktok}")
     return {
         "name": name,
         "airtable_id": airtable_id,
@@ -380,6 +403,9 @@ def post_zernio(api_key: str, body: dict | str, *, dry_run: bool = False, retrie
                 timeout=ZERNIO_TIMEOUT_SEC,
             )
         except Exception as exc:  # noqa: BLE001
+            dup = parse_zernio_duplicate_error(str(exc))
+            if dup:
+                return dup
             last_exc = exc
             text = str(exc).lower()
             retryable = any(
