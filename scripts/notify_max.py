@@ -12,6 +12,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 from max_notify import notify_from_publish_result, send_message  # noqa: E402
 
 
+def _record_from_worker_result(result: dict) -> dict:
+    """Normalize worker-last-run.json (batch errors or results) to one carousel record."""
+    if result.get("results"):
+        return result["results"][0]
+    if result.get("errors"):
+        err = result["errors"][0]
+        record: dict = {
+            "name": err.get("name", "unknown"),
+            "error": err.get("error"),
+        }
+        if err.get("partial_instagram"):
+            record["instagram"] = {"post": {"status": "published"}}
+            record["tiktok"] = {
+                "error": err.get("error"),
+                "post": {"platforms": [{"platform": "tiktok", "status": "failed"}]},
+            }
+        return record
+    return result
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Send report to MAX bot")
     parser.add_argument("--text", help="Free message body (markdown ok)")
@@ -28,8 +48,7 @@ def main() -> None:
     if args.result_file:
         path = Path(args.result_file)
         result = json.loads(path.read_text(encoding="utf-8"))
-        # При batch-run берём первый результат; иначе сам result
-        record = result.get("results", [result])[0] if result.get("results") else result
+        record = _record_from_worker_result(result)
         pair_label = args.pair
         notify_from_publish_result(
             pair_id=args.pair,
