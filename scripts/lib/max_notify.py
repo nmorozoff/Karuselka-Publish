@@ -278,7 +278,9 @@ def notify_from_publish_result(
         tt = {"error": str(tiktok_skipped)[:500], "status": "skipped"}
     ig_status = _zernio_platform_status(ig)
     tt_status = _zernio_platform_status(tt)
-    if ig_status in ("unknown", "not_attempted") and tt_status in ("unknown", "not_attempted"):
+    if result.get("error"):
+        pass
+    elif ig_status in ("unknown", "not_attempted") and tt_status in ("unknown", "not_attempted"):
         try:
             from publish_incidents import log_incident
 
