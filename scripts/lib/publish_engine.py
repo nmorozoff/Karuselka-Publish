@@ -16,7 +16,12 @@ from pathlib import Path
 from typing import Any
 
 from publish_cleanup import assert_zernio_ok, cleanup_carousel_assets
-from publish_failure import classify_failure_message, failed_record, zernio_response_ok
+from publish_failure import (
+    classify_failure_message,
+    failed_record,
+    zernio_duplicate_conflict_response,
+    zernio_response_ok,
+)
 from dropbox_client import ensure_shared_link, get_access_token
 from http_client import http_json, urlopen
 from publish_config import (
@@ -100,6 +105,9 @@ def _publish_instagram_then_tiktok(
     _pause_between_platforms()
     try:
         tiktok = post_zernio(tt_key, tt_payload)
+        if not zernio_response_ok(tiktok):
+            tt_err = json.dumps(tiktok, ensure_ascii=False)[:2000]
+            raise RuntimeError(tt_err)
     except Exception as tt_exc:
         tt_err = str(tt_exc)
         meta = classify_failure_message(tt_err)
@@ -381,6 +389,9 @@ def post_zernio(api_key: str, body: dict | str, *, dry_run: bool = False, retrie
             )
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
+            dup = zernio_duplicate_conflict_response(str(exc))
+            if dup:
+                return dup
             text = str(exc).lower()
             retryable = any(
                 s in text
