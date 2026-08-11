@@ -123,8 +123,8 @@ def _publish_instagram_then_tiktok(
             raise RuntimeError(f"PARTIAL_IG_OK|{tt_err}") from tt_exc
         raise
     if not zernio_response_ok(tiktok):
-        tt_err = json.dumps(tiktok, ensure_ascii=False)[:4000]
-        meta = classify_failure_message(tt_err)
+        tt_err_full = json.dumps(tiktok, ensure_ascii=False)
+        meta = classify_failure_message(tt_err_full)
         if zernio_response_ok(instagram) and meta.get("needs_human"):
             return {
                 "name": name,
@@ -132,13 +132,13 @@ def _publish_instagram_then_tiktok(
                 "mode": f"{mode}_instagram_only",
                 "instagram": instagram,
                 "tiktok": tiktok,
-                "tiktok_skipped": tt_err[:2000],
+                "tiktok_skipped": tt_err_full[:2000],
                 "partial": True,
                 "needs_human_tiktok": True,
                 "failure_category": meta.get("category"),
             }
         if zernio_response_ok(instagram) and meta.get("retryable"):
-            raise RuntimeError(f"PARTIAL_IG_OK|{tt_err}")
+            raise RuntimeError(f"PARTIAL_IG_OK|{tt_err_full[:4000]}")
         raise RuntimeError(f"Zernio tiktok error: {tiktok}")
     return {
         "name": name,
