@@ -33,6 +33,27 @@ def zernio_response_ok(res: dict[str, Any] | None) -> bool:
     return bool(post)
 
 
+def zernio_response_error_text(res: dict[str, Any] | None) -> str:
+    if not res or not isinstance(res, dict):
+        return "empty Zernio response"
+    if res.get("error"):
+        return str(res["error"])[:2000]
+    post = res.get("post")
+    if isinstance(post, dict):
+        for platform in post.get("platforms") or []:
+            if not isinstance(platform, dict):
+                continue
+            err = platform.get("errorMessage") or platform.get("error")
+            if err:
+                return str(err)[:2000]
+        if str(post.get("status") or "").lower() in ("failed", "error"):
+            return str(res.get("message") or post.get("status") or res)[:2000]
+    msg = str(res.get("message") or "")
+    if msg:
+        return msg[:2000]
+    return str(res)[:2000]
+
+
 def classify_failure_message(text: str) -> dict[str, Any]:
     lower = text.lower()
     if any(

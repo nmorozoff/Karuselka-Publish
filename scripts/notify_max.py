@@ -28,16 +28,30 @@ def main() -> None:
     if args.result_file:
         path = Path(args.result_file)
         result = json.loads(path.read_text(encoding="utf-8"))
-        # При batch-run берём первый результат; иначе сам result
-        record = result.get("results", [result])[0] if result.get("results") else result
         pair_label = args.pair
-        notify_from_publish_result(
-            pair_id=args.pair,
-            pair_label=pair_label,
-            carousel_name=record.get("name", "unknown"),
-            result=record,
-            next_folder=args.next_folder,
-        )
+        if result.get("errors") and not result.get("results"):
+            err_item = result["errors"][0]
+            carousel = err_item.get("name", "unknown")
+            err_text = str(err_item.get("error", "unknown error"))[:1500]
+            lines = [
+                f"🚀 Karuselka Publish — {args.pair}",
+                f"Папка: {carousel}",
+                f"❌ Ошибка: {err_text}",
+            ]
+            if err_item.get("partial_instagram"):
+                lines.append("⚠️ Instagram: опубликован частично, TikTok — retry позже")
+            lines.append(f"Следующий: {args.next_folder}")
+            send_message("\n".join(lines))
+        else:
+            # При batch-run берём первый результат; иначе сам result
+            record = result.get("results", [result])[0] if result.get("results") else result
+            notify_from_publish_result(
+                pair_id=args.pair,
+                pair_label=pair_label,
+                carousel_name=record.get("name", "unknown"),
+                result=record,
+                next_folder=args.next_folder,
+            )
         print("OK")
         return
 
