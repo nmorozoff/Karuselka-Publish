@@ -6,113 +6,75 @@
 
 ```text
 Фабрика (export_publish_bundle.py)
-  → Dropbox /Content_Plan/Pair1|Pair2|Pair3/{Name}/
-  → Airtable row (очередь)
+  → Dropbox /Content_Plan/Queue/{Name}/
+  → Airtable row (единая таблица, FIFO по createdTime / порядку строк)
         ↓
-Publish (publish_worker.py)
-  → Zernio API (PUBLISH_MODE=grok_hook / mixed)
-  → cleanup Airtable + Dropbox
+Publish (publish_worker.py --pair pairN)
+  → берёт ПЕРВУЮ строку глобальной очереди (поле «Пара» НЕ фильтрует)
+  → публикует в Instagram+TikTok аккаунты pairN (слот расписания)
+  → cleanup: удалить строку Airtable + папку Queue/{Name}
   → Макс-бот notify
 ```
 
+**Маршрутизация стилей → аккаунты:** не через столбец Airtable, а через **расписание automation**:
+
+| Слот MSK | `--pair` | Куда уходит первая карусель в очереди |
+|----------|----------|--------------------------------------|
+| 10:00, 17:00, 20:00 | pair1 | IG/TikTok pair1 |
+| 11:00, 18:00, 21:00 | pair2 | IG/TikTok pair2 |
+| 12:00, 19:00, 22:00 | pair3 | IG/TikTok pair3 |
+
+Фабрика кладёт карусели любого стиля в одну очередь; какой аккаунт получит конкретную карусель — определяет **кто первый забрал слот** после её появления в Queue.
+
 ## Airtable
 
-| Пара | Base | Table |
-|------|------|-------|
-| pair1 | `appQTNsDMuodYyp34` | `tblFWCmLCXLrOdKut` |
-| pair2 | `appQTNsDMuodYyp34` | `tbl2zotNwOmWLSTyC` |
-| pair3 | `appQTNsDMuodYyp34` | `tblNv5eMi1BXbu4Tq` |
+**Единая таблица:** `Каруселька Queue` (`tblIf0GuVmiDj199M`).
 
-### Поля (обязательные)
-
-| Поле Airtable | Смысл |
-|---------------|-------|
-| `Name` | Имя папки карусели, напр. `crsl_20260802_1320_782` |
-| `Описание карусели` | Caption Instagram (Zernio) |
+| Поле | Смысл |
+|------|-------|
+| `Name` | Имя папки карусели |
+| `Описание карусели` | Caption Instagram |
 | `TikTok заголовок` | Заголовок TikTok (≤90 символов) |
 | `TikTok описание` | Описание TikTok |
+| `Пара` | **Справочно** (фабрика); publish **игнорирует** при выборе строки |
 
-`Dropbox Path` — **опционально** (сейчас ломает Airtable 422 при create; publish резолвит путь из `accounts-pairs.json`).
+Конфиг: `airtable_queue` в `accounts-pairs.json`.
 
 ## Dropbox
 
-| Пара | Корень папки |
-|------|--------------|
-| pair1 | `/Content_Plan/Pair1/{Name}/` |
-| pair2 | `/Content_Plan/Pair2/{Name}/` |
-| pair3 | `/Content_Plan/Pair3/{Name}/` |
+**Единая очередь:** `/Content_Plan/Queue/{Name}/`
 
-`resolve_carousel_dropbox_path()` использует `pair.dropbox_root` из `publish-memory/accounts-pairs.json`, **не** legacy `/Content_Plan/{Name}`.
+Конфиг: `queue_dropbox_root` в `publish-memory/accounts-pairs.json`.
+
+Legacy fallback (если папка ещё в старом месте): `/Content_Plan/Pair1|2|3/{Name}/`.
 
 ### Файлы в папке карусели
 
 | Файл | Instagram | TikTok |
 |------|-----------|--------|
-| `slide-01.mp4` | ✅ hook (mixed carousel) | ❌ не уходит |
-| `slide-01.png` … `slide-06.png` | slide-02..06 в mixed carousel или все 6 в photo | все 6 PNG |
+| `slide-01.mp4` | ✅ hook (mixed carousel) | ❌ |
+| `slide-01.png` … `slide-06.png` | slide-02..06 или все 6 | все 6 PNG |
 | `caption.txt` | справочно | — |
 | `manifest.json` | контракт export | — |
 
-### manifest.json (от фабрики)
-
-```json
-{
-  "publish": {
-    "instagram": { "mode": "mixed", "slide1": "slide-01.mp4", "slides2n": "slide-02..06.png" },
-    "tiktok": { "mode": "photo_carousel", "slides": "slide-01..06.png" }
-  }
-}
-```
-
-Publish-воркер ориентируется на `PUBLISH_MODE=grok_hook` + наличие `slide-01.mp4`, не на поле manifest.
-
 ## Zernio
 
-- **Instagram:** `slide-01.mp4` + `slide-02..06.png` (mixed carousel)
-- **TikTok:** только `slide-01..06.png` (`auto_add_music: true`)
-- Режим: `PUBLISH_MODE=grok_hook` (default)
+- **Instagram:** `slide-01.mp4` + `slide-02..06.png` (mixed) или все PNG
+- **TikTok:** `slide-01..06.png`, `auto_add_music: true`
+- Режим: `PUBLISH_MODE=grok_hook`
 
 ## Worker state
 
-`publish-memory/worker-state.json` (локально) или Dropbox `/Content_Plan/.karuselka/worker-state.json` (cloud):
+Dropbox `/Content_Plan/.karuselka/worker-state.json` (cloud):
 
-```json
-{
-  "published": ["crsl_..."],
-  "published_pair2": [],
-  "published_pair3": [],
-  "failed": { "crsl_...": { "at": "...", "error": "...", "category": "rate_limit", "retryable": true } },
-  "partial_published": { "crsl_...": { "instagram": true, "tiktok_skipped": "..." } },
-  "last_run": {}
-}
-```
+- `published` / `published_pair2` / `published_pair3` — история по слотам
+- `failed` — глобально по имени карусели (блокирует очередь до retry/purge)
 
-Ошибка одной карусели → `failed` с `category` / `retryable` / `needs_human` (`publish_failure.py`).
-
-**Фабрика:** см. `shared/KARUSELKA-FACTORY-PUBLISH-SPEC.md` — как не генерировать aspect-ratio/spam/bad_request failed.
-
-**Очистка:** `python scripts/manage_failed_queue.py reconcile` (purge junk + clear retryable).
-
-## Секреты (не коммитить)
-
-| Файл | Переменные |
-|------|------------|
-| `publish-memory/airtable.env.local` | `AIRTABLE_ACCESS_TOKEN` |
-| `publish-memory/dropbox.env.local` | `DROPBOX_ACCESS_TOKEN` или OAuth trio |
-| `publish-memory/zernio.env.local` | `ZERNIO_API_KEY`, `ZERNIO_PAIR2_API_KEY`, `ZERNIO_PAIR3_API_KEY`, `PUBLISH_MODE` |
-| `publish-memory/max.env.local` | `MAX_BOT_TOKEN`, `MAX_NOTIFY_CHAT_ID` или `MAX_PREVIEW_CHAT_ID` |
-
-Можно symlink на `Karuselka-emdr/carusel-memory/*.env.local` при локальной разработке.
-
-## Команды publish
+## Команды
 
 ```bash
-# Статус очереди
 python scripts/publish_status.py
-
-# Dry-run (без Zernio/cleanup)
-python scripts/publish_worker.py --pair pair1 --name crsl_... --dry-run
-
-# Публикация (только по явному запросу)
-python scripts/publish_worker.py --pair pair1 --limit 1
+python scripts/publish_worker.py --pair pair2 --limit 1 --dry-run-first
 ```
+
+`--pair` = **куда публиковать** (Zernio аккаунты), не фильтр Airtable.

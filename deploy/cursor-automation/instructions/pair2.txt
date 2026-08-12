@@ -2,52 +2,38 @@
 Репозиторий: nmorozoff/Karuselka-Publish
 Не генерируешь слайды, caption, Kie, Grok.
 
-Пара: pair2
-Лимит: 1 карусель за run. При 429 не запускай вторую карусель в том же run — только incident + stop.
+=== ЭТОТ ЗАПУСК ===
+Слот: pair2 → публикуешь в IG/TikTok pair2 (@natalia_morozova_psy / @natalyamorozovapsy)
+Zernio: ZERNIO_PAIR2_API_KEY
+Расписание MSK: 11:00, 18:00, 21:00
+Лимит: 1 карусель за run. При 429 — incident + stop.
 
-ПРАВИЛО: при ошибке не останавливайся сразу.
-Диагностика, retry если уместно, publish_incident.py, продолжай run, Fixic в конце.
-Запрещено: увидел ошибку и stop без инцидента и без Fixic.
+=== ЕДИНАЯ ОЧЕРЕДЬ (критично) ===
+Dropbox: /Content_Plan/Queue/{Name}/
+Airtable: одна таблица «Каруселька Queue» — все карусели в одном списке.
+Берёшь ПЕРВУЮ строку очереди (FIFO по createdTime / верх таблицы).
+Поле «Пара» в Airtable НЕ смотришь и НЕ фильтруешь — оно справочное.
+--pair pair2 означает: первая карусель из Queue → аккаунты pair2.
+
+ПРАВИЛО: при ошибке — диагностика, incident, Fixic.
+Запрещено: фильтровать по Пара; stop без инцидента; вторая карусель при 429.
 
 ФАЗА A PREFLIGHT
-1. Прочитай .cursor/karuselka-publish-handoff.md
-2. Прочитай deploy/cursor-automation/CLOUD_AGENT_PROMPT.md
-3. python3 scripts/materialize_cloud_env.py --check
-   если fail: python3 scripts/materialize_cloud_env.py и повтори check один раз
-   если снова fail: python3 scripts/publish_incident.py --pair pair2 --stage preflight --error "текст ошибки"
-   затем Fixic
+1. shared/queue-contract.md + publish-memory/accounts-pairs.json
+2. deploy/cursor-automation/CLOUD_AGENT_PROMPT.md
+3. python3 scripts/materialize_cloud_env.py --check (retry materialize 1 раз)
 
 ФАЗА B ОЧЕРЕДЬ
 4. WORKER_STATE_BACKEND=dropbox WORKER_STATE_DROPBOX_PATH=/Content_Plan/.karuselka/worker-state.json python3 scripts/publish_status.py --pair pair2
-5. если ready=0 и failed больше 0:
-   прочитай failed в worker-state
-   попробуй один раз:
-   WORKER_STATE_BACKEND=dropbox WORKER_STATE_DROPBOX_PATH=/Content_Plan/.karuselka/worker-state.json python3 scripts/publish_worker.py --pair pair2 --retry-failed --limit 1 --dry-run-first
-6. если ready=0 и failed=0:
-   python3 scripts/notify_max.py --text "Очередь pair2 пуста"
-   Fixic проверь cron и automation
-   stop
+5. next_fifo / ready — глобальная очередь.
+   ready=0 → notify_max «Глобальная очередь Queue пуста» → stop
+   failed>0 → один --retry-failed --limit 1 --dry-run-first
 
 ФАЗА C ПУБЛИКАЦИЯ
-7. WORKER_STATE_BACKEND=dropbox WORKER_STATE_DROPBOX_PATH=/Content_Plan/.karuselka/worker-state.json python3 scripts/publish_worker.py --pair pair2 --limit 1 --dry-run-first
-8. Прочитай publish-memory/output/worker-last-run.json
-   если aborted true: incident, диагностика Dropbox path и слайды, retry dry-run на следующей ready карусели если есть
-   если status error:
-     python3 scripts/publish_incident.py --pair pair2 --stage publish --error "текст" --carousel "имя"
-     python3 scripts/notify_max.py --result-file publish-memory/output/worker-last-run.json --pair pair2
-     один retry failed или следующей ready
-   если success:
-     проверь отчет Макс
-     Instagram и TikTok не должны быть not_attempted при реальной публикации
-     иначе incident stage notify
+6. WORKER_STATE_BACKEND=dropbox WORKER_STATE_DROPBOX_PATH=/Content_Plan/.karuselka/worker-state.json python3 scripts/publish_worker.py --pair pair2 --limit 1 --dry-run-first
+7. worker-last-run.json: dropbox_folder=/Content_Plan/Queue/{Name}/, pair=pair2
 
-ФАЗА D FIXIC обязательно при любом инциденте
-9. Прочитай deploy/cursor-automation/PUBLISH_FIXIC.md
-10. python3 scripts/publish_incident.py --list-open
-11. Почини код и скрипты в репозитории минимальным diff
-12. py_compile на измененных py файлах
-13. Закрой INC в publish-memory/pipeline-fix-queue.md status fixed или needs-human
-14. Итог в Макс:
-    python3 scripts/notify_max.py --text "Fixic pair2: краткий итог"
+ФАЗА D FIXIC при инциденте
+8. PUBLISH_FIXIC.md → publish_incident.py --list-open → notify_max Fixic pair2
 
 Контракт: shared/queue-contract.md

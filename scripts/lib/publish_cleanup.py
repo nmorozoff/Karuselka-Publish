@@ -34,8 +34,9 @@ def cleanup_carousel_assets(
     dropbox_folder: str,
     carousel_name: str,
     delete_dropbox_folder,
+    folder_candidates: list[str] | None = None,
 ) -> dict[str, bool]:
-    """Удалить Airtable-строку, папку карусели и Ready_Carousel."""
+    """Удалить Airtable-строку, папку карусели (все кандидаты) и Ready_Carousel."""
     out = {"airtable": False, "dropbox": False, "ready_carousel": False}
     if record_id:
         delete_record(
@@ -45,8 +46,15 @@ def cleanup_carousel_assets(
             record_id,
         )
         out["airtable"] = True
-    delete_dropbox_folder(dropbox_token, dropbox_folder)
-    out["dropbox"] = True
+    paths = folder_candidates or [dropbox_folder]
+    seen: set[str] = set()
+    for path in paths:
+        norm = path if path.startswith("/") else f"/{path}"
+        if norm in seen:
+            continue
+        seen.add(norm)
+        if delete_dropbox_folder(dropbox_token, norm, optional=True):
+            out["dropbox"] = True
     out["ready_carousel"] = delete_dropbox_folder(
         dropbox_token, f"/Ready_Carousel/{carousel_name}", optional=True
     )

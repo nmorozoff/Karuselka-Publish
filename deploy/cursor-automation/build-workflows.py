@@ -88,6 +88,14 @@ def agent_instruction(pair: str) -> str:
 """
 
 
+def load_instruction(pair: str) -> str:
+    """Берёт готовый промпт из instructions/pairN.txt (источник правды)."""
+    path = OUT_TXT / f"{pair}.txt"
+    if path.exists():
+        return path.read_text(encoding="utf-8").strip() + "\n"
+    return agent_instruction(pair)
+
+
 def schedule_lines() -> str:
     lines = [
         "Karuselka Publish — расписание automations",
@@ -129,7 +137,7 @@ def build_json(pair: str, time_msk: str, cron: str, slug: str) -> dict:
         "workflow": {
             "triggers": [{"cron": {"cron": cron}}],
             "actions": [],
-            "prompts": [agent_instruction(pair)],
+            "prompts": [load_instruction(pair)],
             "model": "",
             "gitConfig": {"repo": REPO, "branch": BRANCH},
             "memoryEnabled": False,
@@ -139,12 +147,9 @@ def build_json(pair: str, time_msk: str, cron: str, slug: str) -> dict:
 
 
 def main() -> None:
-    OUT_TXT.mkdir(parents=True, exist_ok=True)
     OUT_JSON.mkdir(parents=True, exist_ok=True)
 
-    for pair in ("pair1", "pair2", "pair3"):
-        (OUT_TXT / f"{pair}.txt").write_text(agent_instruction(pair), encoding="utf-8")
-
+    # instructions/pairN.txt — редактируются вручную; JSON собирается из них
     (OUT_TXT / "SCHEDULE.txt").write_text(schedule_lines(), encoding="utf-8")
 
     index = []

@@ -34,6 +34,17 @@ def load_accounts_pairs() -> dict:
     return json.loads(accounts_pairs_path().read_text(encoding="utf-8"))
 
 
+def queue_dropbox_root(cfg: dict | None = None) -> str:
+    """Единая папка очереди для всех каруселей (все пары)."""
+    data = cfg if cfg is not None else load_accounts_pairs()
+    root = (
+        data.get("queue_dropbox_root")
+        or os.environ.get("DROPBOX_QUEUE_ROOT")
+        or "/Content_Plan/Queue"
+    )
+    return str(root).rstrip("/")
+
+
 def merge_env(*paths: Path) -> dict[str, str]:
     merged: dict[str, str] = dict(os.environ)
     for p in paths:
@@ -77,7 +88,33 @@ def load_runtime_env() -> dict[str, str]:
 def pair_config(pair_id: str) -> dict:
     cfg = load_accounts_pairs()
     key = pair_id if pair_id in ("pair1", "pair2", "pair3") else "pair1"
-    return cfg[key]
+    out = dict(cfg[key])
+    unified = cfg.get("airtable_queue")
+    if unified:
+        at = dict(unified)
+        fields = dict(at.get("fields") or {})
+        fields.setdefault("pair", "Пара")
+        at["fields"] = fields
+        out["airtable"] = at
+    return out
+
+
+def queue_airtable(cfg: dict | None = None) -> dict | None:
+    """Единая таблица очереди (если настроена)."""
+    data = cfg if cfg is not None else load_accounts_pairs()
+    return data.get("airtable_queue")
+
+
+def pair_queue_airtable(pair_id: str, cfg: dict | None = None) -> dict:
+    """Airtable config для пары: unified queue или legacy per-pair table."""
+    data = cfg if cfg is not None else load_accounts_pairs()
+    unified = data.get("airtable_queue")
+    if unified:
+        at = dict(unified)
+        at["pair_id"] = pair_id
+        return at
+    key = pair_id if pair_id in ("pair1", "pair2", "pair3") else "pair1"
+    return data[key]["airtable"]
 
 
 def zernio_api_key(env: dict[str, str], pair: dict) -> str:
@@ -126,13 +163,9 @@ def zernio_tiktok_account_id(pair: dict, env: dict[str, str]) -> str:
 
 
 def resolve_carousel_dropbox_path(pair: dict, fields: dict, name: str) -> str:
-    """Путь к папке карусели в Dropbox (pair.dropbox_root/{Name})."""
+    """Путь к папке карусели: единая Queue, затем legacy pair root."""
     folder_field = pair.get("airtable", {}).get("fields", {}).get("folder_path")
     if folder_field and fields.get(folder_field):
         path = str(fields[folder_field]).strip()
         return path if path.startswith("/") else f"/{path}"
-    pair_root = pair.get("dropbox_root")
-    if pair_root:
-        return f"{str(pair_root).rstrip('/')}/{name}"
-    root = os.environ.get("DROPBOX_CONTENT_PLAN_ROOT", "/Content_Plan").rstrip("/")
-    return f"{root}/{name}"
+    return f"{queue_dropbox_root()}/{name}"

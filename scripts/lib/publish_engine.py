@@ -22,6 +22,7 @@ from http_client import http_json, urlopen
 from publish_config import (
     load_runtime_env,
     pair_config,
+    queue_dropbox_root,
     resolve_carousel_dropbox_path,
     zernio_api_key_for_platform,
     zernio_instagram_account_id,
@@ -46,12 +47,26 @@ PUBLISH_MODE = os.environ.get("PUBLISH_MODE", "grok_hook").strip().lower()
 
 
 def list_queue_records(env: dict[str, str], pair: dict) -> list[dict]:
-    base = pair["airtable"]["base_id"]
-    table = pair["airtable"]["table_id"]
+    """Все строки единой очереди Airtable (без фильтра по полю Пара)."""
+    at = pair["airtable"]
+    base = at["base_id"]
+    table = at["table_id"]
     token = env["AIRTABLE_ACCESS_TOKEN"]
-    url = f"https://api.airtable.com/v0/{base}/{table}?maxRecords=50"
-    data = http_json("GET", url, headers={"Authorization": f"Bearer {token}"})
-    return data.get("records", [])
+
+    records: list[dict] = []
+    offset: str | None = None
+    while True:
+        params: dict[str, str] = {"pageSize": "100"}
+        if offset:
+            params["offset"] = offset
+        qs = urllib.parse.urlencode(params)
+        url = f"https://api.airtable.com/v0/{base}/{table}?{qs}"
+        data = http_json("GET", url, headers={"Authorization": f"Bearer {token}"})
+        records.extend(data.get("records", []))
+        offset = data.get("offset")
+        if not offset:
+            break
+    return records
 
 
 def _published_state_key(accounts_pair_id: str) -> str:
@@ -126,8 +141,27 @@ def _publish_instagram_then_tiktok(
     }
 
 
-def _ready_records(records: list[dict], state: dict, pair_id: str) -> list[dict]:
-    published = _load_published_set(state, pair_id)
+def _record_created_time(rec: dict) -> str:
+    return str(rec.get("createdTime") or "")
+
+
+def sort_queue_fifo(records: list[dict]) -> list[dict]:
+    """Порядок публикации = порядок строк в Airtable (старые первые)."""
+    return sorted(records, key=_record_created_time)
+
+
+def _all_published_names(state: dict) -> set[str]:
+    names: set[str] = set()
+    for key in ("published", "published_pair2", "published_pair3"):
+        raw = state.get(key, [])
+        if isinstance(raw, list):
+            names.update(raw)
+    return names
+
+
+def _ready_records(records: list[dict], state: dict) -> list[dict]:
+    """Глобальная очередь: skip published (любая пара) и failed."""
+    published = _all_published_names(state)
     failed_names = set(state.get("failed", {}).keys())
     return [
         r
@@ -145,12 +179,12 @@ def queue_next_hint(
     *,
     exclude_name: str | None = None,
 ) -> tuple[str | None, int]:
-    """Return (next carousel name, ready count) after optional exclude."""
+    """Return (next carousel name, ready count) — глобальная FIFO-очередь."""
     pair = pair_config(pair_id)
-    ready = _ready_records(list_queue_records(env, pair), state, pair_id)
+    ready = _ready_records(list_queue_records(env, pair), state)
     if exclude_name:
         ready = [r for r in ready if r.get("fields", {}).get("Name") != exclude_name]
-    ready.sort(key=lambda r: r.get("fields", {}).get("Name", ""))
+    ready = sort_queue_fifo(ready)
     if not ready:
         return None, 0
     name = ready[0].get("fields", {}).get("Name")
@@ -158,31 +192,41 @@ def queue_next_hint(
 
 
 def get_queue_summary(env: dict[str, str] | None = None) -> dict[str, Any]:
-    """Статус очереди: Airtable, published, failed, ready."""
+    """Статус очереди: единая FIFO + per-pair published stats."""
     env = env or load_runtime_env()
     token = get_access_token(env)
     state = load_state(token if os.environ.get("WORKER_STATE_BACKEND") == "dropbox" else None)
 
-    pairs_summary: dict[str, dict[str, int]] = {}
+    queue_pair = pair_config("pair1")
+    all_records = list_queue_records(env, queue_pair)
+    ready = sort_queue_fifo(_ready_records(all_records, state))
+    next_name = ready[0].get("fields", {}).get("Name") if ready else None
+    failed = {
+        name
+        for name, meta in (state.get("failed") or {}).items()
+        if isinstance(meta, dict)
+    }
+
+    pairs_summary: dict[str, dict[str, int | str | None]] = {}
     for pair_id in ("pair1", "pair2", "pair3"):
-        pair = pair_config(pair_id)
-        records = list_queue_records(env, pair)
         published = _load_published_set(state, pair_id)
-        failed = {
-            name
-            for name, meta in (state.get("failed") or {}).items()
-            if isinstance(meta, dict)
-        }
-        ready = _ready_records(records, state, pair_id)
         pairs_summary[pair_id] = {
-            "airtable_total": len(records),
+            "airtable_total": len(all_records),
             "published": len(published),
-            "failed": len([r for r in records if r.get("fields", {}).get("Name") in failed]),
+            "failed": len([r for r in all_records if r.get("fields", {}).get("Name") in failed]),
             "ready": len(ready),
+            "next_fifo": next_name,
+            "queue_folder": queue_dropbox_root(),
+            "routing": "global_fifo_to_run_pair",
         }
 
     return {
         "at": datetime.now(timezone.utc).isoformat(),
+        "queue_folder": queue_dropbox_root(),
+        "queue_mode": "global_fifo",
+        "next_fifo": next_name,
+        "ready": len(ready),
+        "airtable_total": len(all_records),
         "pairs": pairs_summary,
         "worker_state_path": str(state.get("_path", "publish-memory/worker-state.json")),
     }
@@ -207,10 +251,10 @@ def _slide_sort_key(path: str) -> int:
 
 
 def dropbox_folder_candidates(pair: dict, fields: dict, name: str) -> list[str]:
-    """Кандидаты путей: Pair1/Pair2 → legacy /Content_Plan/{Name}."""
+    """Кандидаты путей: единая Queue → legacy Pair → старый /Content_Plan/{Name}."""
     primary = resolve_carousel_dropbox_path(pair, fields, name)
     root = os.environ.get("DROPBOX_CONTENT_PLAN_ROOT", "/Content_Plan").rstrip("/")
-    candidates = [primary, f"{root}/{name}"]
+    candidates = [primary, f"{queue_dropbox_root()}/{name}", f"{root}/{name}"]
     pair_root = pair.get("dropbox_root")
     if pair_root:
         candidates.append(f"{str(pair_root).rstrip('/')}/{name}")
@@ -571,6 +615,7 @@ def process_record(
         raise RuntimeError("Record missing Name")
 
     dropbox_token = get_access_token(env)
+    folder_candidates = dropbox_folder_candidates(queue_pair, fields, name)
     dropbox_folder = find_carousel_dropbox_folder(dropbox_token, queue_pair, fields, name)
     ig_key = zernio_api_key_for_platform(env, accounts_pair, "instagram")
     tt_key = zernio_api_key_for_platform(env, accounts_pair, "tiktok")
@@ -686,6 +731,7 @@ def process_record(
             dropbox_folder=dropbox_folder,
             carousel_name=name,
             delete_dropbox_folder=delete_dropbox_folder,
+            folder_candidates=folder_candidates,
         )
 
     return result
@@ -744,7 +790,7 @@ def run_publish_batch(
     dropbox_token = get_access_token(env)
     state = load_state(dropbox_token if os.environ.get("WORKER_STATE_BACKEND") == "dropbox" else None)
     published = _load_published_set(state, accounts_pair_id)
-    pair1_published = _load_published_set(state, "pair1")
+    all_published = _all_published_names(state)
     records = list_queue_records(env, queue_pair)
 
     if name:
@@ -758,17 +804,11 @@ def run_publish_batch(
         records = [
             r
             for r in records
-            if r.get("fields", {}).get("Name") not in published
+            if r.get("fields", {}).get("Name") not in all_published
             and r.get("fields", {}).get("Name") not in failed_names
         ]
-        if queue_pair_id == "pair1" and accounts_pair_id == "pair2":
-            records = [
-                r
-                for r in records
-                if r.get("fields", {}).get("Name") not in pair1_published
-            ]
 
-    records = sorted(records, key=lambda r: r.get("fields", {}).get("Name", ""))
+    records = sort_queue_fifo(records)
     if not records:
         return {"status": "empty", "message": "Queue empty or all published", "results": []}
 

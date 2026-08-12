@@ -1,11 +1,24 @@
 {
   "version": 2,
-  "description": "Три пары IG+TikTok. Pair1 = скетч. Pair2 = Минимализм / BORDO. Pair3 = скетч neon / BORDO (отдельные Zernio API IG/TT).",
+  "description": "Единая очередь Queue + FIFO. Слот automation (--pair) задаёт аккаунты Zernio; поле Пара в Airtable не используется для маршрутизации.",
+  "queue_dropbox_root": "/Content_Plan/Queue",
   "schedule": {
     "carousels_per_day_per_pair": 3,
-    "pair1_msk": ["10:00", "17:00", "20:00"],
-    "pair2_msk": ["11:00", "18:00", "21:00"],
-    "pair3_msk": ["12:00", "19:00", "22:00"],
+    "pair1_msk": [
+      "10:00",
+      "17:00",
+      "20:00"
+    ],
+    "pair2_msk": [
+      "11:00",
+      "18:00",
+      "21:00"
+    ],
+    "pair3_msk": [
+      "12:00",
+      "19:00",
+      "22:00"
+    ],
     "note": "Cursor Automations: cron UTC = MSK-3. По 1 карусели за запуск."
   },
   "pair1": {
@@ -18,20 +31,25 @@
     "dropbox_root": "/Content_Plan/Pair1",
     "airtable": {
       "base_id": "appQTNsDMuodYyp34",
-      "table_id": "tblFWCmLCXLrOdKut",
+      "table_id": "tblIf0GuVmiDj199M",
       "fields": {
         "name": "Name",
         "instagram_caption": "Описание карусели",
         "tiktok_title": "TikTok заголовок",
-        "tiktok_description": "TikTok описание"
+        "tiktok_description": "TikTok описание",
+        "pair": "Пара"
       }
     },
     "style_fixed": "excalibur-sketch-collage",
-    "publish_times_msk": ["10:00", "17:00", "20:00"]
+    "publish_times_msk": [
+      "10:00",
+      "17:00",
+      "20:00"
+    ]
   },
   "pair2": {
     "id": "pair2",
-    "label": "Инста2 + TikTok2 (Минимализм / BORDO)",
+    "label": "Инста2 + TikTok2 (BORDO)",
     "instagram_account": "@natalia_morozova_psy",
     "tiktok_account": "@natalyamorozovapsy",
     "zernio_instagram_account_id": "6a6a3ccadf17280d93d6828d",
@@ -39,16 +57,21 @@
     "dropbox_root": "/Content_Plan/Pair2",
     "airtable": {
       "base_id": "appQTNsDMuodYyp34",
-      "table_id": "tbl2zotNwOmWLSTyC",
+      "table_id": "tblIf0GuVmiDj199M",
       "fields": {
         "name": "Name",
         "instagram_caption": "Описание карусели",
         "tiktok_title": "TikTok заголовок",
-        "tiktok_description": "TikTok описание"
+        "tiktok_description": "TikTok описание",
+        "pair": "Пара"
       }
     },
-    "style_fixed": "minimalism",
-    "publish_times_msk": ["11:00", "18:00", "21:00"]
+    "style_fixed": "bordo",
+    "publish_times_msk": [
+      "11:00",
+      "18:00",
+      "21:00"
+    ]
   },
   "pair3": {
     "id": "pair3",
@@ -62,15 +85,31 @@
     "dropbox_root": "/Content_Plan/Pair3",
     "airtable": {
       "base_id": "appQTNsDMuodYyp34",
-      "table_id": "tblNv5eMi1BXbu4Tq",
+      "table_id": "tblIf0GuVmiDj199M",
       "fields": {
         "name": "Name",
         "instagram_caption": "Описание карусели",
         "tiktok_title": "TikTok заголовок",
-        "tiktok_description": "TikTok описание"
+        "tiktok_description": "TikTok описание",
+        "pair": "Пара"
       }
     },
     "style_fixed": "excalibur-sketch-collage-pair3",
-    "publish_times_msk": ["12:00", "19:00", "22:00"]
+    "publish_times_msk": [
+      "12:00",
+      "19:00",
+      "22:00"
+    ]
+  },
+  "airtable_queue": {
+    "base_id": "appQTNsDMuodYyp34",
+    "table_id": "tblIf0GuVmiDj199M",
+    "fields": {
+      "name": "Name",
+      "pair": "Пара",
+      "instagram_caption": "Описание карусели",
+      "tiktok_title": "TikTok заголовок",
+      "tiktok_description": "TikTok описание"
+    }
   }
 }

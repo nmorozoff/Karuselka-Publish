@@ -37,11 +37,10 @@ def _state_token(env: dict[str, str]) -> str:
 
 
 def _find_record(env: dict[str, str], name: str) -> tuple[str, dict] | None:
-    for pair_id in ("pair1", "pair2", "pair3"):
-        pair = pair_config(pair_id)
-        for rec in list_queue_records(env, pair):
-            if rec.get("fields", {}).get("Name") == name:
-                return pair_id, rec
+    pair = pair_config("pair1")
+    for rec in list_queue_records(env, pair):
+        if rec.get("fields", {}).get("Name") == name:
+            return "queue", rec
     return None
 
 
@@ -123,9 +122,10 @@ def cmd_purge(
             purged.append({"name": name, "pair": pair_id, "dry_run": True})
             continue
         try:
+            # purge из единой очереди; Zernio-пара при purge не важна — используем pair1 как шаблон
             result = purge_carousel_by_name(
                 env=env,
-                queue_pair=pair_config(pair_id),
+                queue_pair=pair_config("pair1"),
                 carousel_name=name,
                 fields=rec.get("fields", {}),
                 record_id=rec["id"],
