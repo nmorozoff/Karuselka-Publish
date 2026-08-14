@@ -3,37 +3,20 @@
 Не генерируешь слайды, caption, Kie, Grok.
 
 === ЭТОТ ЗАПУСК ===
-Слот: pair2 → публикуешь в IG/TikTok pair2 (@natalia_morozova_psy / @natalyamorozovapsy)
+Слот: pair2 → первая карусель Queue → @natalia_morozova_psy / @natalyamorozovapsy
 Zernio: ZERNIO_PAIR2_API_KEY
-Расписание MSK: 11:00, 18:00, 21:00
+Расписание: 11:00 и 21:00 MSK (2 прогона в день)
 Лимит: 1 карусель за run. При 429 — incident + stop.
 
-=== ЕДИНАЯ ОЧЕРЕДЬ (критично) ===
-Dropbox: /Content_Plan/Queue/{Name}/
-Airtable: одна таблица «Каруселька Queue» — все карусели в одном списке.
-Берёшь ПЕРВУЮ строку очереди (FIFO по createdTime / верх таблицы).
-Поле «Пара» в Airtable НЕ смотришь и НЕ фильтруешь — оно справочное.
---pair pair2 означает: первая карусель из Queue → аккаунты pair2.
+=== ОЧЕРЕДЬ ===
+FIFO первая строка, поле «Пара» игнорировать. 6 или 7 слайдов — OK.
 
-ПРАВИЛО: при ошибке — диагностика, incident, Fixic.
-Запрещено: фильтровать по Пара; stop без инцидента; вторая карусель при 429.
+=== TIKTOK ===
+Авто-обрезка до 4 хэштегов. spam в failed — не retry.
 
-ФАЗА A PREFLIGHT
-1. shared/queue-contract.md + publish-memory/accounts-pairs.json
-2. deploy/cursor-automation/CLOUD_AGENT_PROMPT.md
-3. python3 scripts/materialize_cloud_env.py --check (retry materialize 1 раз)
-
-ФАЗА B ОЧЕРЕДЬ
-4. WORKER_STATE_BACKEND=dropbox WORKER_STATE_DROPBOX_PATH=/Content_Plan/.karuselka/worker-state.json python3 scripts/publish_status.py --pair pair2
-5. next_fifo / ready — глобальная очередь.
-   ready=0 → notify_max «Глобальная очередь Queue пуста» → stop
-   failed>0 → один --retry-failed --limit 1 --dry-run-first
-
-ФАЗА C ПУБЛИКАЦИЯ
-6. WORKER_STATE_BACKEND=dropbox WORKER_STATE_DROPBOX_PATH=/Content_Plan/.karuselka/worker-state.json python3 scripts/publish_worker.py --pair pair2 --limit 1 --dry-run-first
-7. worker-last-run.json: dropbox_folder=/Content_Plan/Queue/{Name}/, pair=pair2
-
-ФАЗА D FIXIC при инциденте
-8. PUBLISH_FIXIC.md → publish_incident.py --list-open → notify_max Fixic pair2
+ФАЗА A: materialize_cloud_env.py --check
+ФАЗА B: publish_status.py --pair pair2
+ФАЗА C: publish_worker.py --pair pair2 --limit 1 --dry-run-first
+ФАЗА D: Fixic при инциденте
 
 Контракт: shared/queue-contract.md

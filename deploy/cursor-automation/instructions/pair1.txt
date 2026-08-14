@@ -3,39 +3,27 @@
 Не генерируешь слайды, caption, Kie, Grok.
 
 === ЭТОТ ЗАПУСК ===
-Слот: pair1 → публикуешь в IG/TikTok pair1 (pair1_instagram / pair1_tiktok)
+Слот: pair1 → первая карусель Queue → IG/TikTok pair1
 Zernio: ZERNIO_API_KEY
-Расписание MSK: 10:00, 17:00, 20:00
-Лимит: 1 карусель за run. При 429 — incident + stop.
+Расписание: 10:00 и 20:00 MSK (2 прогона в день)
+Лимит: 1 карусель за run. При 429 — incident + stop, без второй карусели.
 
-=== ЕДИНАЯ ОЧЕРЕДЬ (критично) ===
-Dropbox: /Content_Plan/Queue/{Name}/
-Airtable: одна таблица «Каруселька Queue» — все карусели в одном списке.
-Берёшь ПЕРВУЮ строку очереди (FIFO по createdTime / верх таблицы).
-Поле «Пара» в Airtable НЕ смотришь и НЕ фильтруешь — оно справочное.
---pair pair1 означает: первая карусель из Queue → аккаунты pair1.
-Следующий слот pair2/pair3 заберёт следующую карусель после cleanup.
+=== ОЧЕРЕДЬ ===
+Dropbox /Content_Plan/Queue/{Name}/, Airtable FIFO — первая строка.
+Поле «Пара» не используется. 6 или 7 PNG в папке — норма (авто).
 
-ПРАВИЛО: при ошибке — диагностика, incident, Fixic.
-Запрещено: фильтровать по Пара; stop без инцидента; вторая карусель при 429.
+=== TIKTOK ХЭШТЕГИ ===
+Publish обрезает описание до 4 хэштегов (TIKTOK_MAX_HASHTAGS).
+Аудит очереди: python3 scripts/audit_tiktok_captions.py
+tiktok_spam в failed — НЕ --retry-failed, только purge/mark-done.
 
-ФАЗА A PREFLIGHT
-1. shared/queue-contract.md + publish-memory/accounts-pairs.json
-2. deploy/cursor-automation/CLOUD_AGENT_PROMPT.md
-3. python3 scripts/materialize_cloud_env.py --check (retry materialize 1 раз)
+Запрещено: retry spam; вторая карусель при 429; stop без incident.
 
-ФАЗА B ОЧЕРЕДЬ
-4. WORKER_STATE_BACKEND=dropbox WORKER_STATE_DROPBOX_PATH=/Content_Plan/.karuselka/worker-state.json python3 scripts/publish_status.py --pair pair1
-5. Смотри next_fifo и ready — это ГЛОБАЛЬНАЯ очередь (одинакова для всех пар).
-   ready=0 → notify_max «Глобальная очередь Queue пуста» → stop
-   failed>0 → один --retry-failed --limit 1 --dry-run-first
-
-ФАЗА C ПУБЛИКАЦИЯ
-6. WORKER_STATE_BACKEND=dropbox WORKER_STATE_DROPBOX_PATH=/Content_Plan/.karuselka/worker-state.json python3 scripts/publish_worker.py --pair pair1 --limit 1 --dry-run-first
-7. worker-last-run.json: dropbox_folder=/Content_Plan/Queue/{Name}/, pair в результате=pair1
-   success → IG+TT ok в Макс; строка удалена из Airtable
-
-ФАЗА D FIXIC при инциденте
-8. PUBLISH_FIXIC.md → publish_incident.py --list-open → notify_max Fixic pair1
+ФАЗА A: materialize_cloud_env.py --check
+ФАЗА B: publish_status.py --pair pair1
+  ready=0 → stop. failed: retry только rate_limit (не spam).
+ФАЗА C: publish_worker.py --pair pair1 --limit 1 --dry-run-first
+  dry-run: slide_count 6 или 7, tiktok_caption.would_trim если много #
+ФАЗА D: Fixic при инциденте
 
 Контракт: shared/queue-contract.md

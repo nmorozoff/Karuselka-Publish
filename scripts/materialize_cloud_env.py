@@ -23,6 +23,7 @@ CLOUD_DEFAULTS = {
     "WORKER_STATE_DROPBOX_PATH": "/Content_Plan/.karuselka/worker-state.json",
     "PUBLISH_MODE": "grok_hook",
     "EXPECTED_IMAGE_SLIDES": "6",
+    "TIKTOK_MAX_HASHTAGS": "4",
 }
 
 

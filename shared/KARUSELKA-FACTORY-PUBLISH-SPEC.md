@@ -99,10 +99,13 @@ for path in slides:
 
 Отклонения `user_abuse` / content guidelines (4 карусели):
 
+- **Хэштеги в TikTok:** не больше **4** в `tiktok_description` (publish обрежет лишние, но лучше сразу ≤4). Ручная публикация с 7–8 # проходила только после удаления лишних.
 - Не дублировать один и тот же CTA на заголовке и описании.
 - Избегать: «ЖМИ», «ПОДПИШИСЬ СЕЙЧАС», цепочки эмодзи, медицинские обещания «100% излечение».
 - Один хук — одна мысль; описание раскрывает, не кричит.
-- **Checklist copywriter:** `tiktok_title_len ≤ 90`, `tiktok_spam_lint: pass` перед export.
+- **Checklist copywriter:** `tiktok_title_len ≤ 90`, `tiktok_hashtags ≤ 4`, `tiktok_spam_lint: pass` перед export.
+
+**Аудит очереди (publish):** `python3 scripts/audit_tiktok_captions.py` → `publish-memory/output/tiktok-caption-audit.json`.
 
 ## 6. TikTok URL ownership (pair2+)
 

@@ -12,16 +12,13 @@ ROOT = Path(__file__).resolve().parent
 OUT_JSON = ROOT / "workflows"
 OUT_TXT = ROOT / "instructions"
 
-# Cron UTC = MSK - 3
+# Cron UTC = MSK - 3. Два прогона в день: утро + вечер (по 1 карусели на пару).
 JOBS = [
     ("pair1", "10:00", "0 7 * * *", "karuselka-publish-pair1-1000"),
-    ("pair1", "17:00", "0 14 * * *", "karuselka-publish-pair1-1700"),
     ("pair1", "20:00", "0 17 * * *", "karuselka-publish-pair1-2000"),
     ("pair2", "11:00", "0 8 * * *", "karuselka-publish-pair2-1100"),
-    ("pair2", "18:00", "0 15 * * *", "karuselka-publish-pair2-1800"),
     ("pair2", "21:00", "0 18 * * *", "karuselka-publish-pair2-2100"),
     ("pair3", "12:00", "0 9 * * *", "karuselka-publish-pair3-1200"),
-    ("pair3", "19:00", "0 16 * * *", "karuselka-publish-pair3-1900"),
     ("pair3", "22:00", "0 19 * * *", "karuselka-publish-pair3-2200"),
 ]
 
@@ -100,7 +97,7 @@ def schedule_lines() -> str:
     lines = [
         "Karuselka Publish — расписание automations",
         "",
-        "Общие настройки для всех 9:",
+        "Общие настройки для всех 6 automations:",
         "Repository: nmorozoff/Karuselka-Publish",
         "Branch: main",
         "Compute: Cloud Agent",
@@ -120,9 +117,9 @@ def schedule_lines() -> str:
             "Если timezone Europe/Moscow — ставь время MSK напрямую.",
             "",
             "Файлы инструкций агента (copy-paste в Agents Instruction):",
-            "instructions/pair1.txt  — для всех трех слотов pair1",
-            "instructions/pair2.txt  — для всех трех слотов pair2",
-            "instructions/pair3.txt  — для всех трех слотов pair3",
+            "instructions/pair1.txt  — утро 10:00 и вечер 20:00 MSK",
+            "instructions/pair2.txt  — утро 11:00 и вечер 21:00 MSK",
+            "instructions/pair3.txt  — утро 12:00 и вечер 22:00 MSK",
             "",
             "Пересобрать: python3 deploy/cursor-automation/build-workflows.py",
         ]

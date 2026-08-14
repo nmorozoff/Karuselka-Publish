@@ -3,23 +3,11 @@
   "description": "Единая очередь Queue + FIFO. Слот automation (--pair) задаёт аккаунты Zernio; поле Пара в Airtable не используется для маршрутизации.",
   "queue_dropbox_root": "/Content_Plan/Queue",
   "schedule": {
-    "carousels_per_day_per_pair": 3,
-    "pair1_msk": [
-      "10:00",
-      "17:00",
-      "20:00"
-    ],
-    "pair2_msk": [
-      "11:00",
-      "18:00",
-      "21:00"
-    ],
-    "pair3_msk": [
-      "12:00",
-      "19:00",
-      "22:00"
-    ],
-    "note": "Cursor Automations: cron UTC = MSK-3. По 1 карусели за запуск."
+    "carousels_per_day_per_pair": 2,
+    "pair1_msk": ["10:00", "20:00"],
+    "pair2_msk": ["11:00", "21:00"],
+    "pair3_msk": ["12:00", "22:00"],
+    "note": "Cursor Automations: 6 jobs (утро+вечер). cron UTC = MSK-3."
   },
   "pair1": {
     "id": "pair1",
@@ -41,11 +29,7 @@
       }
     },
     "style_fixed": "excalibur-sketch-collage",
-    "publish_times_msk": [
-      "10:00",
-      "17:00",
-      "20:00"
-    ]
+    "publish_times_msk": ["10:00", "20:00"]
   },
   "pair2": {
     "id": "pair2",
@@ -67,11 +51,7 @@
       }
     },
     "style_fixed": "bordo",
-    "publish_times_msk": [
-      "11:00",
-      "18:00",
-      "21:00"
-    ]
+    "publish_times_msk": ["11:00", "21:00"]
   },
   "pair3": {
     "id": "pair3",
@@ -95,11 +75,7 @@
       }
     },
     "style_fixed": "excalibur-sketch-collage-pair3",
-    "publish_times_msk": [
-      "12:00",
-      "19:00",
-      "22:00"
-    ]
+    "publish_times_msk": ["12:00", "22:00"]
   },
   "airtable_queue": {
     "base_id": "appQTNsDMuodYyp34",

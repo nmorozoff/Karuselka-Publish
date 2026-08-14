@@ -17,6 +17,7 @@ from typing import Any
 
 from publish_cleanup import assert_zernio_ok, cleanup_carousel_assets
 from publish_failure import classify_failure_message, failed_record, zernio_response_ok
+from tiktok_caption import prepare_tiktok_fields
 from dropbox_client import ensure_shared_link, get_access_token
 from http_client import http_json, urlopen
 from publish_config import (
@@ -335,10 +336,12 @@ def list_media_bundle(token: str, dropbox_folder: str) -> dict[str, Any]:
     count = len(images)
     if count < 2:
         raise RuntimeError(f"Too few image slides in {dropbox_folder}: {count}")
-    # Допустимые размеры: 6, 7 (legacy), 9 (3x3 grid)
+    # 6 или 7 PNG — норма; 9 — grid 3×3. Число берётся из папки, не из EXPECTED_IMAGE_SLIDES.
     allowed = {6, 7, 9}
     if count not in allowed:
-        raise RuntimeError(f"Unexpected slide count in {dropbox_folder}: expected 6/7/9, got {count}")
+        raise RuntimeError(
+            f"Unexpected slide count in {dropbox_folder}: expected 6, 7 or 9 PNG, got {count}"
+        )
     expected = count
     return {
         "folder": dropbox_folder,
@@ -386,8 +389,9 @@ def build_instagram_grok_payload(
 
 
 def build_tiktok_payload(fields: dict, image_urls: list[str], account_id: str) -> dict:
-    return {
-        "content": (fields.get("TikTok заголовок") or "Карусель")[:90],
+    title, description, caption_meta = prepare_tiktok_fields(fields)
+    payload = {
+        "content": title,
         "mediaItems": [{"type": "image", "url": u} for u in image_urls],
         "platforms": [{"platform": "tiktok", "accountId": account_id}],
         "tiktokSettings": {
@@ -395,13 +399,14 @@ def build_tiktok_payload(fields: dict, image_urls: list[str], account_id: str) -
             "allow_comment": True,
             "media_type": "photo",
             "photo_cover_index": 0,
-            "description": (fields.get("TikTok описание") or fields.get("Описание карусели") or "")[:4000],
+            "description": description,
             "auto_add_music": True,
             "content_preview_confirmed": True,
             "express_consent_given": True,
         },
         "publishNow": True,
     }
+    return payload
 
 
 def post_zernio(api_key: str, body: dict | str, *, dry_run: bool = False, retries: int | None = None) -> dict:
@@ -628,6 +633,7 @@ def process_record(
 
     if dry_run:
         mode = "mixed" if has_video else "photo_carousel"
+        _, _, caption_meta = prepare_tiktok_fields(fields)
         return {
             "dry_run": True,
             "name": name,
@@ -638,7 +644,9 @@ def process_record(
             "zernio_tiktok_account_id": tt_acc,
             "mode": mode,
             "images": len(slide_paths),
+            "slide_count": len(slide_paths),
             "hook_video": hook_video,
+            "tiktok_caption": caption_meta,
         }
 
     image_urls = [ensure_shared_link(p, dropbox_token) for p in slide_paths]
