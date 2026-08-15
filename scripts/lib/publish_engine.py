@@ -102,6 +102,50 @@ def _pause_between_platforms() -> None:
         time.sleep(ZERNIO_PLATFORM_GAP_SEC)
 
 
+def _zernio_error_text(res: dict[str, Any]) -> str:
+    if res.get("error"):
+        return str(res["error"])
+    post = res.get("post")
+    if isinstance(post, dict):
+        for platform in post.get("platforms") or []:
+            if not isinstance(platform, dict):
+                continue
+            if str(platform.get("status") or "").lower() == "failed":
+                msg = platform.get("errorMessage") or platform.get("error")
+                if msg:
+                    return str(msg)
+        if post.get("status") == "failed":
+            return str(res.get("message") or post.get("status"))
+    return json.dumps(res, ensure_ascii=False)[:4000]
+
+
+def _partial_instagram_on_tiktok_failure(
+    *,
+    instagram: dict[str, Any],
+    tt_err: str,
+    name: str,
+    airtable_id: str,
+    mode: str,
+) -> dict[str, Any] | None:
+    if not zernio_response_ok(instagram):
+        return None
+    meta = classify_failure_message(tt_err)
+    if meta.get("needs_human"):
+        return {
+            "name": name,
+            "airtable_id": airtable_id,
+            "mode": f"{mode}_instagram_only",
+            "instagram": instagram,
+            "tiktok_skipped": tt_err[:2000],
+            "partial": True,
+            "needs_human_tiktok": True,
+            "failure_category": meta.get("category"),
+        }
+    if meta.get("retryable"):
+        raise RuntimeError(f"PARTIAL_IG_OK|{tt_err}")
+    return None
+
+
 def _publish_instagram_then_tiktok(
     *,
     ig_key: str,
@@ -118,21 +162,28 @@ def _publish_instagram_then_tiktok(
         tiktok = post_zernio(tt_key, tt_payload)
     except Exception as tt_exc:
         tt_err = str(tt_exc)
-        meta = classify_failure_message(tt_err)
-        if zernio_response_ok(instagram) and meta.get("needs_human"):
-            return {
-                "name": name,
-                "airtable_id": airtable_id,
-                "mode": f"{mode}_instagram_only",
-                "instagram": instagram,
-                "tiktok_skipped": tt_err[:2000],
-                "partial": True,
-                "needs_human_tiktok": True,
-                "failure_category": meta.get("category"),
-            }
-        if zernio_response_ok(instagram) and meta.get("retryable"):
-            raise RuntimeError(f"PARTIAL_IG_OK|{tt_err}") from tt_exc
+        partial = _partial_instagram_on_tiktok_failure(
+            instagram=instagram,
+            tt_err=tt_err,
+            name=name,
+            airtable_id=airtable_id,
+            mode=mode,
+        )
+        if partial:
+            return partial
         raise
+    if not zernio_response_ok(tiktok):
+        tt_err = _zernio_error_text(tiktok)
+        partial = _partial_instagram_on_tiktok_failure(
+            instagram=instagram,
+            tt_err=tt_err,
+            name=name,
+            airtable_id=airtable_id,
+            mode=mode,
+        )
+        if partial:
+            return partial
+        raise RuntimeError(f"Zernio tiktok error: {tiktok}")
     return {
         "name": name,
         "airtable_id": airtable_id,
