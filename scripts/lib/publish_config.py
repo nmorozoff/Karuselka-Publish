@@ -89,6 +89,7 @@ def pair_config(pair_id: str) -> dict:
     cfg = load_accounts_pairs()
     key = pair_id if pair_id in ("pair1", "pair2", "pair3") else "pair1"
     out = dict(cfg[key])
+    out.setdefault("id", key)
     unified = cfg.get("airtable_queue")
     if unified:
         at = dict(unified)

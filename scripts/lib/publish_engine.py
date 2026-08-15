@@ -16,7 +16,12 @@ from pathlib import Path
 from typing import Any
 
 from publish_cleanup import assert_zernio_ok, cleanup_carousel_assets
-from publish_failure import classify_failure_message, failed_record, zernio_response_ok
+from publish_failure import (
+    classify_failure_message,
+    failed_record,
+    parse_rate_limited_until,
+    zernio_response_ok,
+)
 from tiktok_caption import prepare_tiktok_fields
 from dropbox_client import ensure_shared_link, get_access_token
 from http_client import http_json, urlopen
@@ -38,9 +43,9 @@ CLOUD_RUN_URL = os.environ.get(
 TRACKS_TABLE = os.environ.get("AIRTABLE_TRACKS_TABLE_ID", "tblfLD5ET7vvp1raT")
 ZERNIO_URL = "https://zernio.com/api/v1/posts"
 ZERNIO_TIMEOUT_SEC = int(os.environ.get("ZERNIO_TIMEOUT_SEC", "600"))
-ZERNIO_PLATFORM_GAP_SEC = int(os.environ.get("ZERNIO_PLATFORM_GAP_SEC", "45"))
+ZERNIO_PLATFORM_GAP_SEC = int(os.environ.get("ZERNIO_PLATFORM_GAP_SEC", "90"))
 ZERNIO_POST_RETRIES = int(os.environ.get("ZERNIO_POST_RETRIES", "3"))
-ZERNIO_RETRY_BACKOFF_SEC = int(os.environ.get("ZERNIO_RETRY_BACKOFF_SEC", "90"))
+ZERNIO_RETRY_BACKOFF_SEC = int(os.environ.get("ZERNIO_RETRY_BACKOFF_SEC", "120"))
 RENDER_TIMEOUT_SEC = int(os.environ.get("RENDER_TIMEOUT_SEC", "1200"))
 POLL_INTERVAL_SEC = int(os.environ.get("RENDER_POLL_INTERVAL_SEC", "30"))
 EXPECTED_IMAGE_SLIDES = int(os.environ.get("EXPECTED_IMAGE_SLIDES", "6"))
@@ -133,6 +138,25 @@ def _publish_instagram_then_tiktok(
         if zernio_response_ok(instagram) and meta.get("retryable"):
             raise RuntimeError(f"PARTIAL_IG_OK|{tt_err}") from tt_exc
         raise
+
+    # TikTok вернул HTTP 200, но внутри ошибка (spam / rejected)
+    if not zernio_response_ok(tiktok) and zernio_response_ok(instagram):
+        tt_err = json.dumps(tiktok, ensure_ascii=False)
+        meta = classify_failure_message(tt_err)
+        if meta.get("needs_human"):
+            return {
+                "name": name,
+                "airtable_id": airtable_id,
+                "mode": f"{mode}_instagram_only",
+                "instagram": instagram,
+                "tiktok": tiktok,
+                "tiktok_skipped": tt_err[:2000],
+                "partial": True,
+                "needs_human_tiktok": True,
+                "failure_category": meta.get("category"),
+            }
+        if meta.get("retryable"):
+            raise RuntimeError(f"PARTIAL_IG_OK|{tt_err}")
     return {
         "name": name,
         "airtable_id": airtable_id,
@@ -409,6 +433,23 @@ def build_tiktok_payload(fields: dict, image_urls: list[str], account_id: str) -
     return payload
 
 
+def _sleep_until_rate_limit_reset(exc_text: str) -> None:
+    """If Zernio 429 response includes rateLimitedUntil, wait until then."""
+    until = parse_rate_limited_until(exc_text)
+    if not until:
+        return
+    try:
+        from datetime import datetime, timezone
+
+        target = datetime.fromisoformat(until.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        wait = (target - now).total_seconds() + 5
+        if wait > 0:
+            time.sleep(min(wait, 300))
+    except Exception:
+        pass
+
+
 def post_zernio(api_key: str, body: dict | str, *, dry_run: bool = False, retries: int | None = None) -> dict:
     body_json = body if isinstance(body, str) else json.dumps(body, ensure_ascii=False)
     if dry_run:
@@ -430,13 +471,17 @@ def post_zernio(api_key: str, body: dict | str, *, dry_run: bool = False, retrie
             )
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
-            text = str(exc).lower()
+            text = str(exc)
+            text_lower = text.lower()
             retryable = any(
-                s in text
+                s in text_lower
                 for s in ("429", "500", "502", "503", "504", "rate limit", "timeout", "too many requests")
             )
             if attempt < max_retries and retryable:
-                time.sleep(ZERNIO_RETRY_BACKOFF_SEC)
+                if "429" in text:
+                    _sleep_until_rate_limit_reset(text)
+                else:
+                    time.sleep(ZERNIO_RETRY_BACKOFF_SEC)
                 continue
             break
     raise last_exc or RuntimeError("post_zernio failed")
@@ -844,6 +889,7 @@ def run_publish_batch(
                     state.get("failed", {}).pop(carousel_name, None)
                     state.setdefault("partial_published", {})[carousel_name] = {
                         "at": datetime.now(timezone.utc).isoformat(),
+                        "pair": accounts_pair_id,
                         "instagram": True,
                         "tiktok_skipped": (res.get("tiktok_skipped") or "")[:2000],
                         "failure_category": res.get("failure_category", "tiktok_spam"),
@@ -851,6 +897,7 @@ def run_publish_batch(
                     }
                     state.setdefault("last_run", {})[carousel_name] = {
                         "at": datetime.now(timezone.utc).isoformat(),
+                        "pair": accounts_pair_id,
                         "ok": True,
                         "partial": True,
                     }
@@ -861,6 +908,7 @@ def run_publish_batch(
                     state.get("partial_published", {}).pop(carousel_name, None)
                     state.setdefault("last_run", {})[carousel_name] = {
                         "at": datetime.now(timezone.utc).isoformat(),
+                        "pair": accounts_pair_id,
                         "ok": True,
                     }
             results.append(res)
@@ -869,14 +917,26 @@ def run_publish_batch(
             if err_text.startswith("PARTIAL_IG_OK|"):
                 tt_err = err_text.split("|", 1)[1]
                 if not dry_run:
+                    published.add(carousel_name)
+                    state[_published_state_key(accounts_pair_id)] = sorted(published)
                     state.setdefault("partial_published", {})[carousel_name] = {
                         "at": datetime.now(timezone.utc).isoformat(),
+                        "pair": accounts_pair_id,
                         "instagram": True,
                         "tiktok_error": tt_err[:2000],
                     }
                     state.setdefault("failed", {})[carousel_name] = failed_record(tt_err)
                     state["failed"][carousel_name]["partial_instagram"] = True
                 errors.append({"name": carousel_name, "error": tt_err, "partial_instagram": True})
+            elif not dry_run and (state.get("partial_published") or {}).get(carousel_name):
+                # TikTok-only retry of an existing partial failed: keep it partial, update error
+                existing = state["partial_published"][carousel_name]
+                existing["at"] = datetime.now(timezone.utc).isoformat()
+                existing["tiktok_error"] = err_text[:2000]
+                existing["pair"] = accounts_pair_id
+                state.setdefault("failed", {})[carousel_name] = failed_record(err_text)
+                state["failed"][carousel_name]["partial_instagram"] = True
+                errors.append({"name": carousel_name, "error": err_text, "partial_instagram": True})
             else:
                 if not dry_run:
                     state.setdefault("failed", {})[carousel_name] = failed_record(err_text)

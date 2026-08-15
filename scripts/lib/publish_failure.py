@@ -73,11 +73,29 @@ def classify_failure_message(text: str) -> dict[str, Any]:
             "needs_human": False,
             "retryable": True,
         }
-    if any(x in lower for x in ("timeout", "502", "503", "504")):
+    if any(
+        x in lower
+        for x in (
+            "timeout",
+            "timed out",
+            "502",
+            "503",
+            "504",
+            "connection reset",
+            "connection refused",
+            "operation timed out",
+        )
+    ):
         return {
             "category": "transient",
             "needs_human": False,
             "retryable": True,
+        }
+    if "409" in lower or "conflict" in lower:
+        return {
+            "category": "conflict",
+            "needs_human": True,
+            "retryable": False,
         }
     if "http error 400" in lower or (
         "400" in lower and any(x in lower for x in ("bad request", "all platforms failed"))
@@ -92,6 +110,16 @@ def classify_failure_message(text: str) -> dict[str, Any]:
         "needs_human": False,
         "retryable": True,
     }
+
+
+def parse_rate_limited_until(text: str) -> str | None:
+    """Extract ISO timestamp from Zernio 429 response, e.g. rateLimitedUntil."""
+    import re
+
+    match = re.search(r'rateLimitedUntil["\']?\s*[:=]\s*["\']?([^"\'>,\s]+)', text)
+    if match:
+        return match.group(1)
+    return None
 
 
 def failed_record(error_text: str, *, at: str | None = None) -> dict[str, Any]:
