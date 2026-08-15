@@ -152,6 +152,25 @@ def _zernio_platform_detail(zernio_response: dict | None) -> str:
     return "—"
 
 
+def resolve_worker_last_run(result: dict) -> dict:
+    """Normalize worker-last-run.json (batch ok/error or single record)."""
+    if result.get("results"):
+        return result["results"][0]
+    errors = result.get("errors") or []
+    if errors:
+        err0 = errors[0]
+        record: dict[str, Any] = {
+            "name": err0.get("name", "unknown"),
+            "error": err0.get("error"),
+        }
+        if err0.get("partial_instagram"):
+            record["partial"] = True
+            record["instagram"] = {"post": {"status": "published"}}
+            record["tiktok"] = {"error": err0.get("error"), "message": err0.get("error")}
+        return record
+    return result
+
+
 def build_publish_report_text(
     *,
     pair_id: str,
@@ -278,7 +297,9 @@ def notify_from_publish_result(
         tt = {"error": str(tiktok_skipped)[:500], "status": "skipped"}
     ig_status = _zernio_platform_status(ig)
     tt_status = _zernio_platform_status(tt)
-    if ig_status in ("unknown", "not_attempted") and tt_status in ("unknown", "not_attempted"):
+    if result.get("error") or result.get("partial"):
+        pass
+    elif ig_status in ("unknown", "not_attempted") and tt_status in ("unknown", "not_attempted"):
         try:
             from publish_incidents import log_incident
 
