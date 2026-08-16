@@ -772,20 +772,25 @@ def process_record(
         if partial_ig_only:
             if "instagram" in result:
                 assert_zernio_ok(result["instagram"], "instagram")
+            # Partial IG (spam/conflict): keep Airtable + Dropbox for manual TikTok retry.
+            result["cleanup"] = {
+                "skipped": True,
+                "reason": "partial_instagram_needs_human_tiktok",
+            }
         else:
             for label, key in (("instagram", "instagram"), ("tiktok", "tiktok")):
                 if key in result and isinstance(result.get(key), dict) and not result[key].get("resumed"):
                     assert_zernio_ok(result[key], label)
-        result["cleanup"] = cleanup_carousel_assets(
-            env=env,
-            queue_pair=queue_pair,
-            record_id=rec["id"],
-            dropbox_token=dropbox_token,
-            dropbox_folder=dropbox_folder,
-            carousel_name=name,
-            delete_dropbox_folder=delete_dropbox_folder,
-            folder_candidates=folder_candidates,
-        )
+            result["cleanup"] = cleanup_carousel_assets(
+                env=env,
+                queue_pair=queue_pair,
+                record_id=rec["id"],
+                dropbox_token=dropbox_token,
+                dropbox_folder=dropbox_folder,
+                carousel_name=name,
+                delete_dropbox_folder=delete_dropbox_folder,
+                folder_candidates=folder_candidates,
+            )
 
     return result
 
