@@ -826,6 +826,40 @@ def _notify_publish_error(
         pass
 
 
+def _partial_retryable_records(
+    env: dict[str, str],
+    queue_pair: dict,
+    state: dict,
+    accounts_pair_id: str,
+) -> list[dict]:
+    """Airtable rows for partial IG publishes awaiting retryable TikTok."""
+    partial = state.get("partial_published") or {}
+    if not partial:
+        return []
+    candidates: list[tuple[str, str]] = []
+    for carousel_name, meta in partial.items():
+        if meta.get("pair") != accounts_pair_id:
+            continue
+        if meta.get("needs_human"):
+            continue
+        failed_meta = (state.get("failed") or {}).get(carousel_name) or {}
+        if failed_meta.get("needs_human"):
+            continue
+        if failed_meta.get("retryable") is False:
+            continue
+        candidates.append((failed_meta.get("at") or meta.get("at") or "", carousel_name))
+    if not candidates:
+        return []
+    candidates.sort()
+    names = {name for _, name in candidates}
+    by_name = {
+        r.get("fields", {}).get("Name"): r
+        for r in list_queue_records(env, queue_pair)
+        if r.get("fields", {}).get("Name") in names
+    }
+    return [by_name[name] for _, name in candidates if name in by_name]
+
+
 def run_publish_batch(
     *,
     pair_id: str = "pair1",
@@ -867,6 +901,8 @@ def run_publish_batch(
         ]
 
     records = sort_queue_fifo(records)
+    if not records and not name:
+        records = _partial_retryable_records(env, queue_pair, state, accounts_pair_id)
     if not records:
         return {"status": "empty", "message": "Queue empty or all published", "results": []}
 
@@ -946,23 +982,25 @@ def run_publish_batch(
                 if not dry_run:
                     state.setdefault("failed", {})[carousel_name] = failed_record(err_text)
                 errors.append({"name": carousel_name, "error": err_text})
-            try:
-                from publish_incidents import log_incident
+            skip_incident = err_text.startswith("PARTIAL_IG_OK|")
+            if not skip_incident:
+                try:
+                    from publish_incidents import log_incident
 
-                log_incident(
-                    pair=accounts_pair_id,
-                    stage="publish",
-                    error=err_text[:4000],
-                    carousel=carousel_name,
-                    suggested_files=[
-                        "scripts/lib/publish_engine.py",
-                        "scripts/lib/publish_failure.py",
-                        "scripts/lib/publish_cleanup.py",
-                        "scripts/lib/max_notify.py",
-                    ],
-                )
-            except Exception:
-                pass
+                    log_incident(
+                        pair=accounts_pair_id,
+                        stage="publish",
+                        error=err_text[:4000],
+                        carousel=carousel_name,
+                        suggested_files=[
+                            "scripts/lib/publish_engine.py",
+                            "scripts/lib/publish_failure.py",
+                            "scripts/lib/publish_cleanup.py",
+                            "scripts/lib/max_notify.py",
+                        ],
+                    )
+                except Exception:
+                    pass
             if not dry_run:
                 _notify_publish_error(
                     accounts_pair=accounts_pair,
