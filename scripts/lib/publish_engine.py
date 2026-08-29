@@ -107,6 +107,40 @@ def _pause_between_platforms() -> None:
         time.sleep(ZERNIO_PLATFORM_GAP_SEC)
 
 
+def _is_tiktok_capacity_error(text: str) -> bool:
+    lower = text.lower()
+    return "at capacity" in lower or "direct posting is at capacity" in lower
+
+
+def _post_tiktok_with_capacity_fallback(tt_key: str, tt_payload: dict) -> dict:
+    """Post TikTok; on Zernio capacity limit, retry once with Creator Inbox draft."""
+    try:
+        tiktok = post_zernio(tt_key, tt_payload)
+    except Exception as exc:
+        tt_err = str(exc)
+        if not _is_tiktok_capacity_error(tt_err):
+            raise
+        draft_payload = json.loads(json.dumps(tt_payload, ensure_ascii=False))
+        draft_payload.setdefault("tiktokSettings", {})["draft"] = True
+        tiktok = post_zernio(tt_key, draft_payload)
+        if zernio_response_ok(tiktok):
+            tiktok = dict(tiktok)
+            tiktok["draft_fallback"] = True
+        return tiktok
+
+    if not zernio_response_ok(tiktok) and _is_tiktok_capacity_error(json.dumps(tiktok, ensure_ascii=False)):
+        draft_payload = json.loads(json.dumps(tt_payload, ensure_ascii=False))
+        draft_payload.setdefault("tiktokSettings", {})["draft"] = True
+        tiktok_draft = post_zernio(tt_key, draft_payload)
+        if zernio_response_ok(tiktok_draft):
+            tiktok_draft = dict(tiktok_draft)
+            tiktok_draft["draft_fallback"] = True
+            return tiktok_draft
+        # Prefer draft attempt result over failed direct post for diagnostics/cleanup.
+        return tiktok_draft
+    return tiktok
+
+
 def _publish_instagram_then_tiktok(
     *,
     ig_key: str,
@@ -120,7 +154,7 @@ def _publish_instagram_then_tiktok(
     instagram = post_zernio(ig_key, ig_payload)
     _pause_between_platforms()
     try:
-        tiktok = post_zernio(tt_key, tt_payload)
+        tiktok = _post_tiktok_with_capacity_fallback(tt_key, tt_payload)
     except Exception as tt_exc:
         tt_err = str(tt_exc)
         meta = classify_failure_message(tt_err)
@@ -704,7 +738,7 @@ def process_record(
             "name": name,
             "airtable_id": rec["id"],
             "mode": "tiktok_resume",
-            "tiktok": post_zernio(tt_key, tt_payload),
+            "tiktok": _post_tiktok_with_capacity_fallback(tt_key, tt_payload),
             "instagram": {"resumed": True, "partial_at": partial.get("at")},
         }
     elif tiktok_only:
@@ -712,7 +746,7 @@ def process_record(
         result = {
             "name": name,
             "airtable_id": rec["id"],
-            "tiktok": post_zernio(tt_key, tt_payload),
+            "tiktok": _post_tiktok_with_capacity_fallback(tt_key, tt_payload),
             "mode": "tiktok_only",
         }
     elif has_video:
