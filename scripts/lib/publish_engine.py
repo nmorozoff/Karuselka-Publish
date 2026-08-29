@@ -795,6 +795,55 @@ def process_record(
     return result
 
 
+def _tiktok_error_summary(tt_err: str) -> str:
+    meta = classify_failure_message(tt_err)
+    category = meta.get("category", "unknown")
+    if category == "tiktok_capacity":
+        return "at capacity (retry на следующем слоте)"
+    if category == "rate_limit":
+        return "rate limit (retry)"
+    if "errorMessage" in tt_err:
+        import re
+
+        match = re.search(r'"errorMessage":\s*"([^"]+)"', tt_err)
+        if match:
+            return match.group(1)[:200]
+    return tt_err[:200]
+
+
+def _notify_partial_ig_ok(
+    *,
+    accounts_pair: dict,
+    carousel_name: str,
+    tt_err: str,
+    env: dict[str, str],
+    dropbox_token: str,
+) -> None:
+    try:
+        from max_notify import notify_publish_complete
+
+        summary = get_queue_summary(env)
+        remaining = {pid: summary["pairs"][pid]["ready"] for pid in ("pair1", "pair2", "pair3")}
+        notify_state = load_state(
+            dropbox_token if os.environ.get("WORKER_STATE_BACKEND") == "dropbox" else None
+        )
+        next_name, next_count = queue_next_hint(
+            env, accounts_pair.get("id", "pair1"), notify_state, exclude_name=carousel_name
+        )
+        notify_publish_complete(
+            pair_id=accounts_pair.get("id", "pair1"),
+            pair_label=accounts_pair.get("label", "pair"),
+            carousel_name=carousel_name,
+            mode="photo_carousel_partial",
+            instagram_result={"post": {"status": "published"}},
+            tiktok_result={"error": _tiktok_error_summary(tt_err), "status": "failed"},
+            next_folder=next_name,
+            queue_ready=next_count or remaining.get(accounts_pair.get("id", "pair1")),
+        )
+    except Exception:
+        pass
+
+
 def _notify_publish_error(
     *,
     accounts_pair: dict,
@@ -867,6 +916,24 @@ def run_publish_batch(
         ]
 
     records = sort_queue_fifo(records)
+    effective_tiktok_only = tiktok_only
+    if not records and not name and not dry_run:
+        all_queue = list_queue_records(env, queue_pair)
+        for pname, pmeta in sorted(
+            (state.get("partial_published") or {}).items(),
+            key=lambda item: item[1].get("at", ""),
+        ):
+            if pmeta.get("pair") != accounts_pair_id or not pmeta.get("instagram"):
+                continue
+            partial_rec = next(
+                (r for r in all_queue if r.get("fields", {}).get("Name") == pname),
+                None,
+            )
+            if partial_rec:
+                records = [partial_rec]
+                effective_tiktok_only = True
+                break
+
     if not records:
         return {"status": "empty", "message": "Queue empty or all published", "results": []}
 
@@ -883,7 +950,7 @@ def run_publish_batch(
                 rec,
                 dry_run=dry_run,
                 skip_cleanup=skip_cleanup,
-                tiktok_only=tiktok_only,
+                tiktok_only=effective_tiktok_only,
                 state=state,
             )
             if not dry_run:
@@ -929,9 +996,17 @@ def run_publish_batch(
                         "pair": accounts_pair_id,
                         "instagram": True,
                         "tiktok_error": tt_err[:2000],
+                        "failure_category": classify_failure_message(tt_err).get("category"),
                     }
                     state.setdefault("failed", {})[carousel_name] = failed_record(tt_err)
                     state["failed"][carousel_name]["partial_instagram"] = True
+                    _notify_partial_ig_ok(
+                        accounts_pair=accounts_pair,
+                        carousel_name=carousel_name,
+                        tt_err=tt_err,
+                        env=env,
+                        dropbox_token=dropbox_token,
+                    )
                 errors.append({"name": carousel_name, "error": tt_err, "partial_instagram": True})
             elif not dry_run and (state.get("partial_published") or {}).get(carousel_name):
                 # TikTok-only retry of an existing partial failed: keep it partial, update error
@@ -946,31 +1021,31 @@ def run_publish_batch(
                 if not dry_run:
                     state.setdefault("failed", {})[carousel_name] = failed_record(err_text)
                 errors.append({"name": carousel_name, "error": err_text})
-            try:
-                from publish_incidents import log_incident
+                try:
+                    from publish_incidents import log_incident
 
-                log_incident(
-                    pair=accounts_pair_id,
-                    stage="publish",
-                    error=err_text[:4000],
-                    carousel=carousel_name,
-                    suggested_files=[
-                        "scripts/lib/publish_engine.py",
-                        "scripts/lib/publish_failure.py",
-                        "scripts/lib/publish_cleanup.py",
-                        "scripts/lib/max_notify.py",
-                    ],
-                )
-            except Exception:
-                pass
-            if not dry_run:
-                _notify_publish_error(
-                    accounts_pair=accounts_pair,
-                    carousel_name=carousel_name,
-                    err_text=err_text,
-                    env=env,
-                    dropbox_token=dropbox_token,
-                )
+                    log_incident(
+                        pair=accounts_pair_id,
+                        stage="publish",
+                        error=err_text[:4000],
+                        carousel=carousel_name,
+                        suggested_files=[
+                            "scripts/lib/publish_engine.py",
+                            "scripts/lib/publish_failure.py",
+                            "scripts/lib/publish_cleanup.py",
+                            "scripts/lib/max_notify.py",
+                        ],
+                    )
+                except Exception:
+                    pass
+                if not dry_run:
+                    _notify_publish_error(
+                        accounts_pair=accounts_pair,
+                        carousel_name=carousel_name,
+                        err_text=err_text,
+                        env=env,
+                        dropbox_token=dropbox_token,
+                    )
 
     if not dry_run:
         save_state(state, dropbox_token if os.environ.get("WORKER_STATE_BACKEND") == "dropbox" else None)
