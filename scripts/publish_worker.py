@@ -11,7 +11,7 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS / "lib"))
 
-from publish_config import MEMORY  # noqa: E402
+from publish_config import MEMORY, load_accounts_pairs  # noqa: E402
 from publish_engine import run_publish_batch  # noqa: E402
 
 
@@ -93,15 +93,14 @@ def main() -> None:
             dry_result["aborted"] = True
             dry_result["reason"] = "queue empty"
             try:
-                from publish_incidents import log_incident
+                from max_notify import notify_queue_empty
 
-                log_incident(
-                    pair=args.pair,
-                    stage="queue",
-                    error="queue empty at dry-run-first",
-                )
-            except Exception:
-                pass
+                pairs_cfg = load_accounts_pairs()
+                pair_label = (pairs_cfg.get(args.pair) or {}).get("label", args.pair)
+                notify_queue_empty(args.pair, pair_label)
+                dry_result["max_notify"] = "queue_empty"
+            except Exception as exc:  # noqa: BLE001
+                dry_result["max_notify_error"] = str(exc)[:500]
             _write_and_print(dry_result)
             return
 
