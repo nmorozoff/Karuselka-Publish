@@ -232,6 +232,16 @@ def send_message(text: str, chat_id: int | None = None) -> dict:
     return data
 
 
+def notify_queue_empty(pair_id: str, pair_label: str | None = None) -> None:
+    """Очередь пуста — штатный skip, не инцидент."""
+    label = pair_label or pair_id
+    lines = [f"📭 Karuselka Publish — {pair_id}"]
+    if label and label != pair_id:
+        lines.append(f"({label})")
+    lines.append("Очередь пуста — публикация пропущена")
+    send_message("\n".join(lines))
+
+
 def notify_publish_complete(
     *,
     pair_id: str,
