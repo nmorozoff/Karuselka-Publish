@@ -93,15 +93,17 @@ def main() -> None:
             dry_result["aborted"] = True
             dry_result["reason"] = "queue empty"
             try:
-                from publish_incidents import log_incident
+                from max_notify import notify_queue_empty
+                from publish_config import load_accounts_pairs
 
-                log_incident(
-                    pair=args.pair,
-                    stage="queue",
-                    error="queue empty at dry-run-first",
+                pair_cfg = load_accounts_pairs().get(args.pair, {})
+                notify_queue_empty(
+                    pair_id=args.pair,
+                    pair_label=pair_cfg.get("label", args.pair),
                 )
-            except Exception:
-                pass
+                dry_result["max_notify"] = "queue_empty"
+            except Exception as exc:
+                dry_result["max_notify_error"] = str(exc)
             _write_and_print(dry_result)
             return
 
