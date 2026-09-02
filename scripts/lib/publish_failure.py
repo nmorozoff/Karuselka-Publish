@@ -76,6 +76,8 @@ def classify_failure_message(text: str) -> dict[str, Any]:
     if any(
         x in lower
         for x in (
+            "at capacity",
+            "capacity right now",
             "timeout",
             "timed out",
             "502",
