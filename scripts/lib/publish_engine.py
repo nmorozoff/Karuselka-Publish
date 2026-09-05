@@ -919,6 +919,7 @@ def run_publish_batch(
             results.append(res)
         except Exception as exc:  # noqa: BLE001
             err_text = str(exc)
+            partial_handled = False
             if err_text.startswith("PARTIAL_IG_OK|"):
                 tt_err = err_text.split("|", 1)[1]
                 if not dry_run:
@@ -933,6 +934,7 @@ def run_publish_batch(
                     state.setdefault("failed", {})[carousel_name] = failed_record(tt_err)
                     state["failed"][carousel_name]["partial_instagram"] = True
                 errors.append({"name": carousel_name, "error": tt_err, "partial_instagram": True})
+                partial_handled = True
             elif not dry_run and (state.get("partial_published") or {}).get(carousel_name):
                 # TikTok-only retry of an existing partial failed: keep it partial, update error
                 existing = state["partial_published"][carousel_name]
@@ -942,35 +944,37 @@ def run_publish_batch(
                 state.setdefault("failed", {})[carousel_name] = failed_record(err_text)
                 state["failed"][carousel_name]["partial_instagram"] = True
                 errors.append({"name": carousel_name, "error": err_text, "partial_instagram": True})
+                partial_handled = True
             else:
                 if not dry_run:
                     state.setdefault("failed", {})[carousel_name] = failed_record(err_text)
                 errors.append({"name": carousel_name, "error": err_text})
-            try:
-                from publish_incidents import log_incident
+            if not partial_handled:
+                try:
+                    from publish_incidents import log_incident
 
-                log_incident(
-                    pair=accounts_pair_id,
-                    stage="publish",
-                    error=err_text[:4000],
-                    carousel=carousel_name,
-                    suggested_files=[
-                        "scripts/lib/publish_engine.py",
-                        "scripts/lib/publish_failure.py",
-                        "scripts/lib/publish_cleanup.py",
-                        "scripts/lib/max_notify.py",
-                    ],
-                )
-            except Exception:
-                pass
-            if not dry_run:
-                _notify_publish_error(
-                    accounts_pair=accounts_pair,
-                    carousel_name=carousel_name,
-                    err_text=err_text,
-                    env=env,
-                    dropbox_token=dropbox_token,
-                )
+                    log_incident(
+                        pair=accounts_pair_id,
+                        stage="publish",
+                        error=err_text[:4000],
+                        carousel=carousel_name,
+                        suggested_files=[
+                            "scripts/lib/publish_engine.py",
+                            "scripts/lib/publish_failure.py",
+                            "scripts/lib/publish_cleanup.py",
+                            "scripts/lib/max_notify.py",
+                        ],
+                    )
+                except Exception:
+                    pass
+                if not dry_run:
+                    _notify_publish_error(
+                        accounts_pair=accounts_pair,
+                        carousel_name=carousel_name,
+                        err_text=err_text,
+                        env=env,
+                        dropbox_token=dropbox_token,
+                    )
 
     if not dry_run:
         save_state(state, dropbox_token if os.environ.get("WORKER_STATE_BACKEND") == "dropbox" else None)
