@@ -102,6 +102,33 @@ def _failed_names_for_run(state: dict, *, retry_failed: bool, include_needs_huma
     return skip
 
 
+def _partial_resume_names(
+    state: dict,
+    accounts_pair_id: str,
+    *,
+    retry_failed: bool,
+    include_needs_human: bool,
+) -> set[str]:
+    """Partial IG ok, TikTok pending — eligible for tiktok_resume on --retry-failed."""
+    if not retry_failed:
+        return set()
+    skip = _failed_names_for_run(
+        state, retry_failed=True, include_needs_human=include_needs_human
+    )
+    failed = state.get("failed") or {}
+    names: set[str] = set()
+    for name, meta in (state.get("partial_published") or {}).items():
+        if not isinstance(meta, dict):
+            continue
+        pair = meta.get("pair")
+        if pair and pair != accounts_pair_id:
+            continue
+        if name in skip or name not in failed:
+            continue
+        names.add(name)
+    return names
+
+
 def _pause_between_platforms() -> None:
     if ZERNIO_PLATFORM_GAP_SEC > 0:
         time.sleep(ZERNIO_PLATFORM_GAP_SEC)
@@ -676,8 +703,11 @@ def process_record(
     hook_video: str | None = media["hook_video"]
     has_video = bool(hook_video)
 
+    partial = (state or {}).get("partial_published", {}).get(name) if state else None
+    resume_tiktok = bool(partial and partial.get("instagram") and not tiktok_only)
+
     if dry_run:
-        mode = "mixed" if has_video else "photo_carousel"
+        mode = "tiktok_resume" if resume_tiktok else ("mixed" if has_video else "photo_carousel")
         _, _, caption_meta = prepare_tiktok_fields(fields)
         return {
             "dry_run": True,
@@ -692,11 +722,10 @@ def process_record(
             "slide_count": len(slide_paths),
             "hook_video": hook_video,
             "tiktok_caption": caption_meta,
+            "resume_tiktok": resume_tiktok,
         }
 
     image_urls = [ensure_shared_link(p, dropbox_token) for p in slide_paths]
-    partial = (state or {}).get("partial_published", {}).get(name) if state else None
-    resume_tiktok = bool(partial and partial.get("instagram") and not tiktok_only)
 
     if resume_tiktok:
         tt_payload = build_tiktok_payload(fields, image_urls, tt_acc)
@@ -859,11 +888,22 @@ def run_publish_batch(
             retry_failed=retry_failed,
             include_needs_human=include_needs_human,
         )
+        resume_names = _partial_resume_names(
+            state,
+            accounts_pair_id,
+            retry_failed=retry_failed,
+            include_needs_human=include_needs_human,
+        )
         records = [
             r
             for r in records
-            if r.get("fields", {}).get("Name") not in all_published
-            and r.get("fields", {}).get("Name") not in failed_names
+            if (
+                (
+                    r.get("fields", {}).get("Name") not in all_published
+                    and r.get("fields", {}).get("Name") not in failed_names
+                )
+                or r.get("fields", {}).get("Name") in resume_names
+            )
         ]
 
     records = sort_queue_fifo(records)
