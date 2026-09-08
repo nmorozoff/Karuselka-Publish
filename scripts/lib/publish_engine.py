@@ -107,6 +107,26 @@ def _pause_between_platforms() -> None:
         time.sleep(ZERNIO_PLATFORM_GAP_SEC)
 
 
+def _post_tiktok_with_capacity_draft_fallback(tt_key: str, tt_payload: dict) -> dict:
+    """Retry TikTok via Creator Inbox when direct posting is at capacity."""
+    import copy
+
+    tiktok = post_zernio(tt_key, tt_payload)
+    if zernio_response_ok(tiktok):
+        return tiktok
+    tt_err = json.dumps(tiktok, ensure_ascii=False)
+    meta = classify_failure_message(tt_err)
+    if not meta.get("draft_fallback"):
+        return tiktok
+    draft_payload = copy.deepcopy(tt_payload)
+    draft_payload.setdefault("tiktokSettings", {})["draft"] = True
+    tiktok_draft = post_zernio(tt_key, draft_payload)
+    if zernio_response_ok(tiktok_draft):
+        tiktok_draft["_delivered_via"] = "tiktok_draft_inbox"
+        return tiktok_draft
+    return tiktok_draft
+
+
 def _publish_instagram_then_tiktok(
     *,
     ig_key: str,
@@ -120,7 +140,7 @@ def _publish_instagram_then_tiktok(
     instagram = post_zernio(ig_key, ig_payload)
     _pause_between_platforms()
     try:
-        tiktok = post_zernio(tt_key, tt_payload)
+        tiktok = _post_tiktok_with_capacity_draft_fallback(tt_key, tt_payload)
     except Exception as tt_exc:
         tt_err = str(tt_exc)
         meta = classify_failure_message(tt_err)
@@ -704,7 +724,7 @@ def process_record(
             "name": name,
             "airtable_id": rec["id"],
             "mode": "tiktok_resume",
-            "tiktok": post_zernio(tt_key, tt_payload),
+            "tiktok": _post_tiktok_with_capacity_draft_fallback(tt_key, tt_payload),
             "instagram": {"resumed": True, "partial_at": partial.get("at")},
         }
     elif tiktok_only:
@@ -712,7 +732,7 @@ def process_record(
         result = {
             "name": name,
             "airtable_id": rec["id"],
-            "tiktok": post_zernio(tt_key, tt_payload),
+            "tiktok": _post_tiktok_with_capacity_draft_fallback(tt_key, tt_payload),
             "mode": "tiktok_only",
         }
     elif has_video:
