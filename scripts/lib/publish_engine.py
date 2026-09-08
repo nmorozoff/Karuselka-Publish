@@ -814,11 +814,32 @@ def _notify_publish_error(
         next_name, next_count = queue_next_hint(
             env, accounts_pair.get("id", "pair1"), notify_state, exclude_name=carousel_name
         )
+        error_display = err_text[:1500]
+        if err_text.startswith("PARTIAL_IG_OK|"):
+            tt_err = err_text.split("|", 1)[1]
+            meta = classify_failure_message(tt_err)
+            category = meta.get("category", "unknown")
+            if category == "tiktok_capacity":
+                error_display = (
+                    "Instagram ✅ опубликован. TikTok ⏳ capacity — "
+                    "повторить позже: --tiktok-only --name "
+                    f"{carousel_name}"
+                )
+            elif meta.get("needs_human"):
+                error_display = (
+                    f"Instagram ✅ опубликован. TikTok ❌ {category} — "
+                    "нужна правка текста/ручной retry"
+                )
+            else:
+                error_display = (
+                    f"Instagram ✅ опубликован. TikTok ❌ {category} — "
+                    f"retry: --tiktok-only --name {carousel_name}"
+                )
         notify_publish_complete(
             pair_id=accounts_pair.get("id", "pair1"),
             pair_label=accounts_pair.get("label", "pair"),
             carousel_name=carousel_name,
-            error=err_text[:1500],
+            error=error_display,
             next_folder=next_name,
             queue_ready=next_count or remaining.get(accounts_pair.get("id", "pair1")),
         )
