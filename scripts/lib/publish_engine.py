@@ -87,6 +87,14 @@ def _load_published_set(state: dict, accounts_pair_id: str) -> set[str]:
     return set()
 
 
+def _partial_tiktok_retry_name(state: dict, accounts_pair_id: str) -> str | None:
+    """Carousel with IG ok but TT pending — retry before new FIFO."""
+    for name, meta in (state.get("partial_published") or {}).items():
+        if isinstance(meta, dict) and meta.get("pair") == accounts_pair_id and meta.get("instagram"):
+            return name
+    return None
+
+
 def _failed_names_for_run(state: dict, *, retry_failed: bool, include_needs_human: bool) -> set[str]:
     """Names in failed to skip (or include when retry_failed)."""
     if not retry_failed:
@@ -851,8 +859,12 @@ def run_publish_batch(
     all_published = _all_published_names(state)
     records = list_queue_records(env, queue_pair)
 
+    partial_retry_name = _partial_tiktok_retry_name(state, accounts_pair_id) if not name else None
+
     if name:
         records = [r for r in records if r.get("fields", {}).get("Name") == name]
+    elif partial_retry_name:
+        records = [r for r in records if r.get("fields", {}).get("Name") == partial_retry_name]
     elif not include_published:
         failed_names = _failed_names_for_run(
             state,
