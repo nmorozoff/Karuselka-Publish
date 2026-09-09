@@ -795,6 +795,58 @@ def process_record(
     return result
 
 
+def _tiktok_error_detail(tt_err: str) -> str:
+    meta = classify_failure_message(tt_err)
+    if meta.get("category") == "tiktok_capacity":
+        return "TikTok capacity — retry позже: --tiktok-only --name … --retry-failed"
+    try:
+        payload = json.loads(tt_err)
+        post = payload.get("post") if isinstance(payload, dict) else None
+        if isinstance(post, dict):
+            for platform in post.get("platforms") or []:
+                if not isinstance(platform, dict):
+                    continue
+                err = platform.get("errorMessage") or platform.get("error")
+                if err:
+                    return str(err)[:200]
+    except Exception:
+        pass
+    return tt_err[:200]
+
+
+def _notify_partial_ig_ok(
+    *,
+    accounts_pair: dict,
+    carousel_name: str,
+    tt_err: str,
+    env: dict[str, str],
+    dropbox_token: str,
+) -> None:
+    try:
+        from max_notify import notify_publish_complete
+
+        summary = get_queue_summary(env)
+        remaining = {pid: summary["pairs"][pid]["ready"] for pid in ("pair1", "pair2", "pair3")}
+        notify_state = load_state(
+            dropbox_token if os.environ.get("WORKER_STATE_BACKEND") == "dropbox" else None
+        )
+        next_name, next_count = queue_next_hint(
+            env, accounts_pair.get("id", "pair1"), notify_state, exclude_name=carousel_name
+        )
+        notify_publish_complete(
+            pair_id=accounts_pair.get("id", "pair1"),
+            pair_label=accounts_pair.get("label", "pair"),
+            carousel_name=carousel_name,
+            mode="photo_carousel (partial)",
+            instagram_result={"post": {"status": "published"}},
+            tiktok_result={"post": {"status": "failed", "platforms": [{"errorMessage": _tiktok_error_detail(tt_err)}]}},
+            next_folder=next_name,
+            queue_ready=next_count or remaining.get(accounts_pair.get("id", "pair1")),
+        )
+    except Exception:
+        pass
+
+
 def _notify_publish_error(
     *,
     accounts_pair: dict,
@@ -929,9 +981,17 @@ def run_publish_batch(
                         "pair": accounts_pair_id,
                         "instagram": True,
                         "tiktok_error": tt_err[:2000],
+                        "failure_category": classify_failure_message(tt_err).get("category"),
                     }
                     state.setdefault("failed", {})[carousel_name] = failed_record(tt_err)
                     state["failed"][carousel_name]["partial_instagram"] = True
+                    _notify_partial_ig_ok(
+                        accounts_pair=accounts_pair,
+                        carousel_name=carousel_name,
+                        tt_err=tt_err,
+                        env=env,
+                        dropbox_token=dropbox_token,
+                    )
                 errors.append({"name": carousel_name, "error": tt_err, "partial_instagram": True})
             elif not dry_run and (state.get("partial_published") or {}).get(carousel_name):
                 # TikTok-only retry of an existing partial failed: keep it partial, update error
@@ -946,24 +1006,25 @@ def run_publish_batch(
                 if not dry_run:
                     state.setdefault("failed", {})[carousel_name] = failed_record(err_text)
                 errors.append({"name": carousel_name, "error": err_text})
-            try:
-                from publish_incidents import log_incident
+            if not err_text.startswith("PARTIAL_IG_OK|"):
+                try:
+                    from publish_incidents import log_incident
 
-                log_incident(
-                    pair=accounts_pair_id,
-                    stage="publish",
-                    error=err_text[:4000],
-                    carousel=carousel_name,
-                    suggested_files=[
-                        "scripts/lib/publish_engine.py",
-                        "scripts/lib/publish_failure.py",
-                        "scripts/lib/publish_cleanup.py",
-                        "scripts/lib/max_notify.py",
-                    ],
-                )
-            except Exception:
-                pass
-            if not dry_run:
+                    log_incident(
+                        pair=accounts_pair_id,
+                        stage="publish",
+                        error=err_text[:4000],
+                        carousel=carousel_name,
+                        suggested_files=[
+                            "scripts/lib/publish_engine.py",
+                            "scripts/lib/publish_failure.py",
+                            "scripts/lib/publish_cleanup.py",
+                            "scripts/lib/max_notify.py",
+                        ],
+                    )
+                except Exception:
+                    pass
+            if not dry_run and not err_text.startswith("PARTIAL_IG_OK|"):
                 _notify_publish_error(
                     accounts_pair=accounts_pair,
                     carousel_name=carousel_name,
