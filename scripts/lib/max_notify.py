@@ -152,6 +152,71 @@ def _zernio_platform_detail(zernio_response: dict | None) -> str:
     return "—"
 
 
+def _extract_tiktok_error_detail(err_text: str) -> str:
+    """Short human-readable TikTok error from Zernio JSON or plain text."""
+    try:
+        data = json.loads(err_text)
+    except (json.JSONDecodeError, TypeError):
+        return err_text[:300]
+
+    for pr in data.get("platformResults") or []:
+        if isinstance(pr, dict) and pr.get("platform") == "tiktok":
+            err = pr.get("error")
+            if err:
+                return str(err)[:300]
+
+    post = data.get("post")
+    if isinstance(post, dict):
+        for platform in post.get("platforms") or []:
+            if not isinstance(platform, dict) or platform.get("platform") != "tiktok":
+                continue
+            err = platform.get("errorMessage") or platform.get("error")
+            if err:
+                return str(err)[:300]
+
+    return str(data.get("error") or data.get("message") or err_text)[:300]
+
+
+def build_partial_ig_report_text(
+    *,
+    pair_id: str,
+    pair_label: str,
+    carousel_name: str,
+    err_text: str,
+    next_folder: str | None = None,
+    queue_ready: int | None = None,
+) -> str:
+    """Readable Max report when Instagram OK but TikTok failed (PARTIAL_IG_OK)."""
+    from publish_failure import classify_failure_message
+
+    raw = err_text.split("|", 1)[1] if err_text.startswith("PARTIAL_IG_OK|") else err_text
+    meta = classify_failure_message(raw)
+    category = meta.get("category", "unknown")
+    tt_detail = _extract_tiktok_error_detail(raw)
+
+    lines = [f"⚠️ Karuselka Publish — {pair_id} (частичный успех)"]
+    if pair_label and pair_label != pair_id:
+        lines.append(f"({pair_label})")
+    lines.append(f"Папка: {carousel_name}")
+    lines.append("Instagram: ✅ ok")
+    lines.append(f"TikTok: ❌ failed ({category})")
+    lines.append(f"Причина: {tt_detail}")
+    if meta.get("retryable"):
+        lines.append(
+            f"Retry: `python3 scripts/publish_worker.py --pair {pair_id} "
+            f"--tiktok-only --name {carousel_name} --retry-failed`"
+        )
+    else:
+        lines.append("Retry: needs-human (не retryable)")
+    if queue_ready is not None and queue_ready > 0 and next_folder:
+        lines.append(f"Следующий: {next_folder} (ещё {queue_ready} в очереди)")
+    elif next_folder:
+        lines.append(f"Следующий: {next_folder}")
+    else:
+        lines.append("Следующий: очередь пуста")
+    return "\n".join(lines)
+
+
 def build_publish_report_text(
     *,
     pair_id: str,

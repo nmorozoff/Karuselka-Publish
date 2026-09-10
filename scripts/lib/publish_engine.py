@@ -804,7 +804,7 @@ def _notify_publish_error(
     dropbox_token: str,
 ) -> None:
     try:
-        from max_notify import notify_publish_complete
+        from max_notify import build_partial_ig_report_text, notify_publish_complete, send_message
 
         summary = get_queue_summary(env)
         remaining = {pid: summary["pairs"][pid]["ready"] for pid in ("pair1", "pair2", "pair3")}
@@ -814,14 +814,29 @@ def _notify_publish_error(
         next_name, next_count = queue_next_hint(
             env, accounts_pair.get("id", "pair1"), notify_state, exclude_name=carousel_name
         )
-        notify_publish_complete(
-            pair_id=accounts_pair.get("id", "pair1"),
-            pair_label=accounts_pair.get("label", "pair"),
-            carousel_name=carousel_name,
-            error=err_text[:1500],
-            next_folder=next_name,
-            queue_ready=next_count or remaining.get(accounts_pair.get("id", "pair1")),
-        )
+        pair_id = accounts_pair.get("id", "pair1")
+        pair_label = accounts_pair.get("label", "pair")
+        queue_ready = next_count or remaining.get(pair_id)
+        if err_text.startswith("PARTIAL_IG_OK|"):
+            send_message(
+                build_partial_ig_report_text(
+                    pair_id=pair_id,
+                    pair_label=pair_label,
+                    carousel_name=carousel_name,
+                    err_text=err_text,
+                    next_folder=next_name,
+                    queue_ready=queue_ready,
+                )
+            )
+        else:
+            notify_publish_complete(
+                pair_id=pair_id,
+                pair_label=pair_label,
+                carousel_name=carousel_name,
+                error=err_text[:1500],
+                next_folder=next_name,
+                queue_ready=queue_ready,
+            )
     except Exception:
         pass
 
