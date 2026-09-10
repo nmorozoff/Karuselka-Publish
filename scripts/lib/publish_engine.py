@@ -102,6 +102,33 @@ def _failed_names_for_run(state: dict, *, retry_failed: bool, include_needs_huma
     return skip
 
 
+def _partial_resume_names(
+    state: dict,
+    accounts_pair_id: str,
+    *,
+    retry_failed: bool,
+    include_needs_human: bool,
+) -> set[str]:
+    """Partial IG ok, TikTok pending — eligible for tiktok_resume on --retry-failed."""
+    if not retry_failed:
+        return set()
+    skip = _failed_names_for_run(
+        state, retry_failed=True, include_needs_human=include_needs_human
+    )
+    failed = state.get("failed") or {}
+    names: set[str] = set()
+    for name, meta in (state.get("partial_published") or {}).items():
+        if not isinstance(meta, dict):
+            continue
+        pair = meta.get("pair")
+        if pair and pair != accounts_pair_id:
+            continue
+        if name in skip or name not in failed:
+            continue
+        names.add(name)
+    return names
+
+
 def _pause_between_platforms() -> None:
     if ZERNIO_PLATFORM_GAP_SEC > 0:
         time.sleep(ZERNIO_PLATFORM_GAP_SEC)
@@ -676,8 +703,11 @@ def process_record(
     hook_video: str | None = media["hook_video"]
     has_video = bool(hook_video)
 
+    partial = (state or {}).get("partial_published", {}).get(name) if state else None
+    resume_tiktok = bool(partial and partial.get("instagram") and not tiktok_only)
+
     if dry_run:
-        mode = "mixed" if has_video else "photo_carousel"
+        mode = "tiktok_resume" if resume_tiktok else ("mixed" if has_video else "photo_carousel")
         _, _, caption_meta = prepare_tiktok_fields(fields)
         return {
             "dry_run": True,
@@ -692,11 +722,10 @@ def process_record(
             "slide_count": len(slide_paths),
             "hook_video": hook_video,
             "tiktok_caption": caption_meta,
+            "resume_tiktok": resume_tiktok,
         }
 
     image_urls = [ensure_shared_link(p, dropbox_token) for p in slide_paths]
-    partial = (state or {}).get("partial_published", {}).get(name) if state else None
-    resume_tiktok = bool(partial and partial.get("instagram") and not tiktok_only)
 
     if resume_tiktok:
         tt_payload = build_tiktok_payload(fields, image_urls, tt_acc)
@@ -826,6 +855,40 @@ def _notify_publish_error(
         pass
 
 
+def _notify_partial_ig_ok(
+    *,
+    accounts_pair: dict,
+    carousel_name: str,
+    tt_err: str,
+    env: dict[str, str],
+    dropbox_token: str,
+) -> None:
+    """Instagram OK, TikTok retryable failure (capacity / transient) — not an incident."""
+    try:
+        from max_notify import notify_publish_complete
+
+        meta = classify_failure_message(tt_err)
+        category = meta.get("category", "transient")
+        notify_state = load_state(
+            dropbox_token if os.environ.get("WORKER_STATE_BACKEND") == "dropbox" else None
+        )
+        next_name, next_count = queue_next_hint(
+            env, accounts_pair.get("id", "pair1"), notify_state, exclude_name=carousel_name
+        )
+        notify_publish_complete(
+            pair_id=accounts_pair.get("id", "pair1"),
+            pair_label=accounts_pair.get("label", "pair"),
+            carousel_name=carousel_name,
+            mode=f"partial_ig ({category})",
+            instagram_result={"status": "published"},
+            tiktok_result={"status": "failed", "error": tt_err[:500]},
+            next_folder=next_name,
+            queue_ready=next_count,
+        )
+    except Exception:
+        pass
+
+
 def run_publish_batch(
     *,
     pair_id: str = "pair1",
@@ -859,11 +922,22 @@ def run_publish_batch(
             retry_failed=retry_failed,
             include_needs_human=include_needs_human,
         )
+        resume_names = _partial_resume_names(
+            state,
+            accounts_pair_id,
+            retry_failed=retry_failed,
+            include_needs_human=include_needs_human,
+        )
         records = [
             r
             for r in records
-            if r.get("fields", {}).get("Name") not in all_published
-            and r.get("fields", {}).get("Name") not in failed_names
+            if (
+                (
+                    r.get("fields", {}).get("Name") not in all_published
+                    and r.get("fields", {}).get("Name") not in failed_names
+                )
+                or r.get("fields", {}).get("Name") in resume_names
+            )
         ]
 
     records = sort_queue_fifo(records)
@@ -946,31 +1020,42 @@ def run_publish_batch(
                 if not dry_run:
                     state.setdefault("failed", {})[carousel_name] = failed_record(err_text)
                 errors.append({"name": carousel_name, "error": err_text})
-            try:
-                from publish_incidents import log_incident
+            is_partial_ig_ok = err_text.startswith("PARTIAL_IG_OK|")
+            if not is_partial_ig_ok:
+                try:
+                    from publish_incidents import log_incident
 
-                log_incident(
-                    pair=accounts_pair_id,
-                    stage="publish",
-                    error=err_text[:4000],
-                    carousel=carousel_name,
-                    suggested_files=[
-                        "scripts/lib/publish_engine.py",
-                        "scripts/lib/publish_failure.py",
-                        "scripts/lib/publish_cleanup.py",
-                        "scripts/lib/max_notify.py",
-                    ],
-                )
-            except Exception:
-                pass
+                    log_incident(
+                        pair=accounts_pair_id,
+                        stage="publish",
+                        error=err_text[:4000],
+                        carousel=carousel_name,
+                        suggested_files=[
+                            "scripts/lib/publish_engine.py",
+                            "scripts/lib/publish_failure.py",
+                            "scripts/lib/publish_cleanup.py",
+                            "scripts/lib/max_notify.py",
+                        ],
+                    )
+                except Exception:
+                    pass
             if not dry_run:
-                _notify_publish_error(
-                    accounts_pair=accounts_pair,
-                    carousel_name=carousel_name,
-                    err_text=err_text,
-                    env=env,
-                    dropbox_token=dropbox_token,
-                )
+                if is_partial_ig_ok:
+                    _notify_partial_ig_ok(
+                        accounts_pair=accounts_pair,
+                        carousel_name=carousel_name,
+                        tt_err=err_text.split("|", 1)[1],
+                        env=env,
+                        dropbox_token=dropbox_token,
+                    )
+                else:
+                    _notify_publish_error(
+                        accounts_pair=accounts_pair,
+                        carousel_name=carousel_name,
+                        err_text=err_text,
+                        env=env,
+                        dropbox_token=dropbox_token,
+                    )
 
     if not dry_run:
         save_state(state, dropbox_token if os.environ.get("WORKER_STATE_BACKEND") == "dropbox" else None)
