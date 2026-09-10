@@ -197,6 +197,30 @@ def _ready_records(records: list[dict], state: dict) -> list[dict]:
     ]
 
 
+def _partial_tiktok_retry_records(
+    records: list[dict],
+    state: dict,
+    accounts_pair_id: str,
+) -> list[dict]:
+    """Карусели с IG ok и pending TikTok — retry до FIFO новых."""
+    partial = state.get("partial_published") or {}
+    if not partial:
+        return []
+    by_name = {r.get("fields", {}).get("Name"): r for r in records}
+    out: list[dict] = []
+    for name, meta in sorted(partial.items()):
+        if not isinstance(meta, dict) or not meta.get("instagram"):
+            continue
+        if meta.get("needs_human"):
+            continue
+        if meta.get("pair", "pair1") != accounts_pair_id:
+            continue
+        rec = by_name.get(name)
+        if rec:
+            out.append(rec)
+    return out
+
+
 def queue_next_hint(
     env: dict[str, str],
     pair_id: str,
@@ -849,24 +873,33 @@ def run_publish_batch(
     state = load_state(dropbox_token if os.environ.get("WORKER_STATE_BACKEND") == "dropbox" else None)
     published = _load_published_set(state, accounts_pair_id)
     all_published = _all_published_names(state)
-    records = list_queue_records(env, queue_pair)
+    all_records = list_queue_records(env, queue_pair)
+    partial_retry = False
 
     if name:
-        records = [r for r in records if r.get("fields", {}).get("Name") == name]
-    elif not include_published:
-        failed_names = _failed_names_for_run(
-            state,
-            retry_failed=retry_failed,
-            include_needs_human=include_needs_human,
-        )
-        records = [
-            r
-            for r in records
-            if r.get("fields", {}).get("Name") not in all_published
-            and r.get("fields", {}).get("Name") not in failed_names
-        ]
+        records = [r for r in all_records if r.get("fields", {}).get("Name") == name]
+    else:
+        partial_records = _partial_tiktok_retry_records(all_records, state, accounts_pair_id)
+        if partial_records and not dry_run:
+            records = partial_records
+            partial_retry = True
+            tiktok_only = True
+        elif not include_published:
+            failed_names = _failed_names_for_run(
+                state,
+                retry_failed=retry_failed,
+                include_needs_human=include_needs_human,
+            )
+            records = [
+                r
+                for r in all_records
+                if r.get("fields", {}).get("Name") not in all_published
+                and r.get("fields", {}).get("Name") not in failed_names
+            ]
+        else:
+            records = list(all_records)
 
-    records = sort_queue_fifo(records)
+    records = sort_queue_fifo(records) if not partial_retry else records
     if not records:
         return {"status": "empty", "message": "Queue empty or all published", "results": []}
 
@@ -929,6 +962,7 @@ def run_publish_batch(
                         "pair": accounts_pair_id,
                         "instagram": True,
                         "tiktok_error": tt_err[:2000],
+                        "failure_category": classify_failure_message(tt_err).get("category"),
                     }
                     state.setdefault("failed", {})[carousel_name] = failed_record(tt_err)
                     state["failed"][carousel_name]["partial_instagram"] = True
