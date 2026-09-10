@@ -826,6 +826,41 @@ def _notify_publish_error(
         pass
 
 
+def _notify_partial_ig_ok(
+    *,
+    accounts_pair: dict,
+    carousel_name: str,
+    tt_err: str,
+    env: dict[str, str],
+    dropbox_token: str,
+) -> None:
+    """Instagram OK, TikTok retryable failure (capacity / transient) — not an incident."""
+    try:
+        from max_notify import notify_publish_complete
+
+        meta = classify_failure_message(tt_err)
+        category = meta.get("category", "transient")
+        summary = get_queue_summary(env)
+        notify_state = load_state(
+            dropbox_token if os.environ.get("WORKER_STATE_BACKEND") == "dropbox" else None
+        )
+        next_name, next_count = queue_next_hint(
+            env, accounts_pair.get("id", "pair1"), notify_state, exclude_name=carousel_name
+        )
+        notify_publish_complete(
+            pair_id=accounts_pair.get("id", "pair1"),
+            pair_label=accounts_pair.get("label", "pair"),
+            carousel_name=carousel_name,
+            mode=f"partial_ig ({category})",
+            instagram_result={"status": "published"},
+            tiktok_result={"status": "failed", "error": tt_err[:500]},
+            next_folder=next_name,
+            queue_ready=next_count,
+        )
+    except Exception:
+        pass
+
+
 def run_publish_batch(
     *,
     pair_id: str = "pair1",
@@ -946,31 +981,42 @@ def run_publish_batch(
                 if not dry_run:
                     state.setdefault("failed", {})[carousel_name] = failed_record(err_text)
                 errors.append({"name": carousel_name, "error": err_text})
-            try:
-                from publish_incidents import log_incident
+            is_partial_ig_ok = err_text.startswith("PARTIAL_IG_OK|")
+            if not is_partial_ig_ok:
+                try:
+                    from publish_incidents import log_incident
 
-                log_incident(
-                    pair=accounts_pair_id,
-                    stage="publish",
-                    error=err_text[:4000],
-                    carousel=carousel_name,
-                    suggested_files=[
-                        "scripts/lib/publish_engine.py",
-                        "scripts/lib/publish_failure.py",
-                        "scripts/lib/publish_cleanup.py",
-                        "scripts/lib/max_notify.py",
-                    ],
-                )
-            except Exception:
-                pass
+                    log_incident(
+                        pair=accounts_pair_id,
+                        stage="publish",
+                        error=err_text[:4000],
+                        carousel=carousel_name,
+                        suggested_files=[
+                            "scripts/lib/publish_engine.py",
+                            "scripts/lib/publish_failure.py",
+                            "scripts/lib/publish_cleanup.py",
+                            "scripts/lib/max_notify.py",
+                        ],
+                    )
+                except Exception:
+                    pass
             if not dry_run:
-                _notify_publish_error(
-                    accounts_pair=accounts_pair,
-                    carousel_name=carousel_name,
-                    err_text=err_text,
-                    env=env,
-                    dropbox_token=dropbox_token,
-                )
+                if is_partial_ig_ok:
+                    _notify_partial_ig_ok(
+                        accounts_pair=accounts_pair,
+                        carousel_name=carousel_name,
+                        tt_err=err_text.split("|", 1)[1],
+                        env=env,
+                        dropbox_token=dropbox_token,
+                    )
+                else:
+                    _notify_publish_error(
+                        accounts_pair=accounts_pair,
+                        carousel_name=carousel_name,
+                        err_text=err_text,
+                        env=env,
+                        dropbox_token=dropbox_token,
+                    )
 
     if not dry_run:
         save_state(state, dropbox_token if os.environ.get("WORKER_STATE_BACKEND") == "dropbox" else None)
