@@ -102,6 +102,37 @@ def _failed_names_for_run(state: dict, *, retry_failed: bool, include_needs_huma
     return skip
 
 
+def _partial_resume_names(
+    state: dict,
+    accounts_pair_id: str,
+    *,
+    retry_failed: bool,
+    include_needs_human: bool,
+) -> set[str]:
+    """Partial IG ok — TikTok resume eligible when --retry-failed (even if in published_*)."""
+    if not retry_failed:
+        return set()
+    failed = state.get("failed") or {}
+    names: set[str] = set()
+    for name, partial in (state.get("partial_published") or {}).items():
+        if not isinstance(partial, dict):
+            continue
+        if partial.get("pair") != accounts_pair_id:
+            continue
+        if not partial.get("instagram"):
+            continue
+        if partial.get("needs_human") and not include_needs_human:
+            continue
+        meta = failed.get(name)
+        if isinstance(meta, dict):
+            if meta.get("needs_human") and not include_needs_human:
+                continue
+            if meta.get("retryable") is False and not include_needs_human:
+                continue
+        names.add(name)
+    return names
+
+
 def _pause_between_platforms() -> None:
     if ZERNIO_PLATFORM_GAP_SEC > 0:
         time.sleep(ZERNIO_PLATFORM_GAP_SEC)
@@ -859,10 +890,19 @@ def run_publish_batch(
             retry_failed=retry_failed,
             include_needs_human=include_needs_human,
         )
+        partial_resume = _partial_resume_names(
+            state,
+            accounts_pair_id,
+            retry_failed=retry_failed,
+            include_needs_human=include_needs_human,
+        )
         records = [
             r
             for r in records
-            if r.get("fields", {}).get("Name") not in all_published
+            if (
+                r.get("fields", {}).get("Name") not in all_published
+                or r.get("fields", {}).get("Name") in partial_resume
+            )
             and r.get("fields", {}).get("Name") not in failed_names
         ]
 
