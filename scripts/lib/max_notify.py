@@ -232,6 +232,23 @@ def send_message(text: str, chat_id: int | None = None) -> dict:
     return data
 
 
+def notify_queue_empty(
+    *,
+    pair_id: str,
+    pair_label: str = "",
+    ready: int = 0,
+    failed: int = 0,
+    airtable_total: int = 0,
+) -> None:
+    """Уведомление в Макс при пустой очереди (без incident)."""
+    lines = [f"📭 Karuselka Publish — {pair_id}"]
+    if pair_label and pair_label != pair_id:
+        lines.append(f"({pair_label})")
+    lines.append("Очередь пуста — публикация пропущена")
+    lines.append(f"ready={ready}, failed={failed}, airtable={airtable_total}")
+    send_message("\n".join(lines))
+
+
 def notify_publish_complete(
     *,
     pair_id: str,
