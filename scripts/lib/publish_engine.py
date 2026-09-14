@@ -450,22 +450,74 @@ def _sleep_until_rate_limit_reset(exc_text: str) -> None:
         pass
 
 
+def _zernio_headers(api_key: str) -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+
+
+def _delete_zernio_post(api_key: str, post_id: str) -> bool:
+    try:
+        http_json(
+            "DELETE",
+            f"{ZERNIO_URL}/{post_id}",
+            headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+            timeout=60,
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _cleanup_zernio_conflict(api_key: str, *, limit: int = 5) -> int:
+    """Remove recent non-published Zernio posts that block retry (HTTP 409)."""
+    try:
+        data = http_json(
+            "GET",
+            f"{ZERNIO_URL}?limit={limit}",
+            headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+            timeout=60,
+        )
+    except Exception:
+        return 0
+    removed = 0
+    for post in data.get("posts") or []:
+        if not isinstance(post, dict):
+            continue
+        status = str(post.get("status") or "").lower()
+        post_id = post.get("_id") or post.get("id")
+        if not post_id:
+            continue
+        if status in ("published", "success", "completed"):
+            continue
+        platforms = post.get("platforms") or []
+        blocked = status in ("failed", "scheduled", "publishing", "pending")
+        if not blocked and platforms:
+            blocked = any(
+                str(p.get("status") or "").lower() in ("failed", "pending", "processing")
+                for p in platforms
+                if isinstance(p, dict)
+            )
+        if blocked and _delete_zernio_post(api_key, str(post_id)):
+            removed += 1
+    return removed
+
+
 def post_zernio(api_key: str, body: dict | str, *, dry_run: bool = False, retries: int | None = None) -> dict:
     body_json = body if isinstance(body, str) else json.dumps(body, ensure_ascii=False)
     if dry_run:
         return {"dry_run": True, "platforms": json.loads(body_json).get("platforms")}
     max_retries = ZERNIO_POST_RETRIES if retries is None else retries
     last_exc: Exception | None = None
+    conflict_cleaned = False
     for attempt in range(max_retries + 1):
         try:
             return http_json(
                 "POST",
                 ZERNIO_URL,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Accept": "application/json",
-                    "Content-Type": "application/json",
-                },
+                headers=_zernio_headers(api_key),
                 body=body_json,
                 timeout=ZERNIO_TIMEOUT_SEC,
             )
@@ -473,6 +525,12 @@ def post_zernio(api_key: str, body: dict | str, *, dry_run: bool = False, retrie
             last_exc = exc
             text = str(exc)
             text_lower = text.lower()
+            if "409" in text_lower and not conflict_cleaned:
+                removed = _cleanup_zernio_conflict(api_key)
+                conflict_cleaned = True
+                if removed:
+                    time.sleep(2)
+                    continue
             retryable = any(
                 s in text_lower
                 for s in ("429", "500", "502", "503", "504", "rate limit", "timeout", "too many requests")
