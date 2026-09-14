@@ -120,7 +120,7 @@ def _publish_instagram_then_tiktok(
     instagram = post_zernio(ig_key, ig_payload)
     _pause_between_platforms()
     try:
-        tiktok = post_zernio(tt_key, tt_payload)
+        tiktok = _post_tiktok_with_capacity_draft_fallback(tt_key, tt_payload)
     except Exception as tt_exc:
         tt_err = str(tt_exc)
         meta = classify_failure_message(tt_err)
@@ -412,25 +412,51 @@ def build_instagram_grok_payload(
     return build_instagram_mixed_payload(fields, hook_video_url, image_urls, account_id)
 
 
-def build_tiktok_payload(fields: dict, image_urls: list[str], account_id: str) -> dict:
+def build_tiktok_payload(
+    fields: dict,
+    image_urls: list[str],
+    account_id: str,
+    *,
+    draft: bool = False,
+) -> dict:
     title, description, caption_meta = prepare_tiktok_fields(fields)
+    tiktok_settings: dict[str, Any] = {
+        "privacy_level": "PUBLIC_TO_EVERYONE",
+        "allow_comment": True,
+        "media_type": "photo",
+        "photo_cover_index": 0,
+        "description": description,
+        "auto_add_music": True,
+        "content_preview_confirmed": True,
+        "express_consent_given": True,
+    }
+    if draft:
+        tiktok_settings["draft"] = True
     payload = {
         "content": title,
         "mediaItems": [{"type": "image", "url": u} for u in image_urls],
         "platforms": [{"platform": "tiktok", "accountId": account_id}],
-        "tiktokSettings": {
-            "privacy_level": "PUBLIC_TO_EVERYONE",
-            "allow_comment": True,
-            "media_type": "photo",
-            "photo_cover_index": 0,
-            "description": description,
-            "auto_add_music": True,
-            "content_preview_confirmed": True,
-            "express_consent_given": True,
-        },
-        "publishNow": True,
+        "tiktokSettings": tiktok_settings,
+        "publishNow": not draft,
     }
     return payload
+
+
+def _post_tiktok_with_capacity_draft_fallback(tt_key: str, tt_payload: dict) -> dict:
+    """Post TikTok; on capacity error retry once with tiktokSettings.draft=true (Creator Inbox)."""
+    tiktok = post_zernio(tt_key, tt_payload)
+    if zernio_response_ok(tiktok):
+        return tiktok
+    err = json.dumps(tiktok, ensure_ascii=False)
+    if classify_failure_message(err).get("category") != "tiktok_capacity":
+        return tiktok
+    draft_payload = json.loads(json.dumps(tt_payload, ensure_ascii=False))
+    draft_payload.setdefault("tiktokSettings", {})["draft"] = True
+    draft_payload["publishNow"] = False
+    draft = post_zernio(tt_key, draft_payload)
+    if zernio_response_ok(draft):
+        draft["capacity_draft_fallback"] = True
+    return draft
 
 
 def _sleep_until_rate_limit_reset(exc_text: str) -> None:
@@ -704,7 +730,7 @@ def process_record(
             "name": name,
             "airtable_id": rec["id"],
             "mode": "tiktok_resume",
-            "tiktok": post_zernio(tt_key, tt_payload),
+            "tiktok": _post_tiktok_with_capacity_draft_fallback(tt_key, tt_payload),
             "instagram": {"resumed": True, "partial_at": partial.get("at")},
         }
     elif tiktok_only:
@@ -712,7 +738,7 @@ def process_record(
         result = {
             "name": name,
             "airtable_id": rec["id"],
-            "tiktok": post_zernio(tt_key, tt_payload),
+            "tiktok": _post_tiktok_with_capacity_draft_fallback(tt_key, tt_payload),
             "mode": "tiktok_only",
         }
     elif has_video:
