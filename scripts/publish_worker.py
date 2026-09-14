@@ -11,8 +11,8 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS / "lib"))
 
-from publish_config import MEMORY  # noqa: E402
-from publish_engine import run_publish_batch  # noqa: E402
+from publish_config import MEMORY, pair_config  # noqa: E402
+from publish_engine import get_queue_summary, run_publish_batch  # noqa: E402
 
 
 def _write_and_print(result: dict) -> None:
@@ -93,12 +93,19 @@ def main() -> None:
             dry_result["aborted"] = True
             dry_result["reason"] = "queue empty"
             try:
-                from publish_incidents import log_incident
+                from max_notify import notify_queue_empty
 
-                log_incident(
-                    pair=args.pair,
-                    stage="queue",
-                    error="queue empty at dry-run-first",
+                summary = get_queue_summary()
+                pair_stats = summary.get("pairs", {}).get(args.pair, {})
+                accounts = pair_config(args.pair)
+                notify_queue_empty(
+                    pair_id=args.pair,
+                    pair_label=accounts.get("label", args.pair),
+                    ready=int(pair_stats.get("ready", summary.get("ready", 0))),
+                    failed=int(pair_stats.get("failed", 0)),
+                    airtable_total=int(
+                        pair_stats.get("airtable_total", summary.get("airtable_total", 0))
+                    ),
                 )
             except Exception:
                 pass
