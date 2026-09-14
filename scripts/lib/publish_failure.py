@@ -84,10 +84,25 @@ def classify_failure_message(text: str) -> dict[str, Any]:
             "connection reset",
             "connection refused",
             "operation timed out",
+            "fetch failed",
+            "media container",
         )
     ):
         return {
             "category": "transient",
+            "needs_human": False,
+            "retryable": True,
+        }
+    if any(
+        x in lower
+        for x in (
+            "at capacity",
+            "quota_exhausted",
+            "quota exhausted",
+        )
+    ):
+        return {
+            "category": "tiktok_capacity",
             "needs_human": False,
             "retryable": True,
         }
