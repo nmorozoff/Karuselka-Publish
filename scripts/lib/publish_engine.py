@@ -102,6 +102,22 @@ def _failed_names_for_run(state: dict, *, retry_failed: bool, include_needs_huma
     return skip
 
 
+def _partial_resume_names(state: dict, accounts_pair_id: str) -> set[str]:
+    """Partial IG ok for this slot — TikTok resume via --retry-failed."""
+    names: set[str] = set()
+    failed = state.get("failed") or {}
+    for name, meta in (state.get("partial_published") or {}).items():
+        if not isinstance(meta, dict):
+            continue
+        if meta.get("pair") != accounts_pair_id:
+            continue
+        if meta.get("needs_human"):
+            continue
+        if name in failed:
+            names.add(name)
+    return names
+
+
 def _pause_between_platforms() -> None:
     if ZERNIO_PLATFORM_GAP_SEC > 0:
         time.sleep(ZERNIO_PLATFORM_GAP_SEC)
@@ -854,15 +870,20 @@ def run_publish_batch(
     if name:
         records = [r for r in records if r.get("fields", {}).get("Name") == name]
     elif not include_published:
+        partial_resume = _partial_resume_names(state, accounts_pair_id) if retry_failed else set()
         failed_names = _failed_names_for_run(
             state,
             retry_failed=retry_failed,
             include_needs_human=include_needs_human,
         )
+        failed_names -= partial_resume
         records = [
             r
             for r in records
-            if r.get("fields", {}).get("Name") not in all_published
+            if (
+                r.get("fields", {}).get("Name") not in all_published
+                or r.get("fields", {}).get("Name") in partial_resume
+            )
             and r.get("fields", {}).get("Name") not in failed_names
         ]
 
@@ -946,23 +967,35 @@ def run_publish_batch(
                 if not dry_run:
                     state.setdefault("failed", {})[carousel_name] = failed_record(err_text)
                 errors.append({"name": carousel_name, "error": err_text})
-            try:
-                from publish_incidents import log_incident
-
-                log_incident(
-                    pair=accounts_pair_id,
-                    stage="publish",
-                    error=err_text[:4000],
-                    carousel=carousel_name,
-                    suggested_files=[
-                        "scripts/lib/publish_engine.py",
-                        "scripts/lib/publish_failure.py",
-                        "scripts/lib/publish_cleanup.py",
-                        "scripts/lib/max_notify.py",
-                    ],
+            skip_incident = False
+            if err_text.startswith("PARTIAL_IG_OK|"):
+                skip_incident = classify_failure_message(err_text.split("|", 1)[1]).get(
+                    "category"
+                ) in ("tiktok_capacity", "rate_limit", "transient")
+            elif errors and errors[-1].get("partial_instagram"):
+                skip_incident = classify_failure_message(err_text).get("category") in (
+                    "tiktok_capacity",
+                    "rate_limit",
+                    "transient",
                 )
-            except Exception:
-                pass
+            if not skip_incident:
+                try:
+                    from publish_incidents import log_incident
+
+                    log_incident(
+                        pair=accounts_pair_id,
+                        stage="publish",
+                        error=err_text[:4000],
+                        carousel=carousel_name,
+                        suggested_files=[
+                            "scripts/lib/publish_engine.py",
+                            "scripts/lib/publish_failure.py",
+                            "scripts/lib/publish_cleanup.py",
+                            "scripts/lib/max_notify.py",
+                        ],
+                    )
+                except Exception:
+                    pass
             if not dry_run:
                 _notify_publish_error(
                     accounts_pair=accounts_pair,
