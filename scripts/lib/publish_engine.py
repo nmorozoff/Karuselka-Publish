@@ -853,10 +853,22 @@ def run_publish_batch(
 
     if name:
         records = [r for r in records if r.get("fields", {}).get("Name") == name]
+    elif retry_failed:
+        # Partial IG+failed TT lives in published + failed; still eligible for tiktok_resume.
+        failed_names = _failed_names_for_run(
+            state,
+            retry_failed=True,
+            include_needs_human=include_needs_human,
+        )
+        records = [
+            r
+            for r in records
+            if r.get("fields", {}).get("Name") not in failed_names
+        ]
     elif not include_published:
         failed_names = _failed_names_for_run(
             state,
-            retry_failed=retry_failed,
+            retry_failed=False,
             include_needs_human=include_needs_human,
         )
         records = [
