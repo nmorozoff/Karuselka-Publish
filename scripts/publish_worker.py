@@ -12,7 +12,8 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS / "lib"))
 
 from publish_config import MEMORY  # noqa: E402
-from publish_engine import run_publish_batch  # noqa: E402
+from publish_engine import _partial_resume_names, run_publish_batch  # noqa: E402
+from worker_state import load_state  # noqa: E402
 
 
 def _write_and_print(result: dict) -> None:
@@ -89,21 +90,65 @@ def main() -> None:
             _write_and_print(dry_result)
             raise SystemExit(1)
         if dry_result.get("status") == "empty":
-            dry_result["mode"] = "dry_run_first"
-            dry_result["aborted"] = True
-            dry_result["reason"] = "queue empty"
-            try:
-                from publish_incidents import log_incident
+            import os
 
-                log_incident(
-                    pair=args.pair,
-                    stage="queue",
-                    error="queue empty at dry-run-first",
+            from dropbox_client import get_access_token  # noqa: E402
+            from publish_config import load_runtime_env  # noqa: E402
+
+            env = load_runtime_env()
+            dropbox_token = get_access_token(env)
+            state = load_state(
+                dropbox_token if os.environ.get("WORKER_STATE_BACKEND") == "dropbox" else None
+            )
+            partial = _partial_resume_names(state, args.accounts or args.pair)
+            if partial and not args.retry_failed:
+                dry_result = run_publish_batch(
+                    pair_id=args.pair,
+                    accounts_pair_id=args.accounts or args.pair,
+                    queue_pair_id=args.queue or args.pair,
+                    limit=args.limit,
+                    name=args.name,
+                    dry_run=True,
+                    skip_cleanup=True,
+                    tiktok_only=args.tiktok_only,
+                    include_published=args.include_published,
+                    retry_failed=True,
+                    include_needs_human=args.include_needs_human,
                 )
-            except Exception:
-                pass
-            _write_and_print(dry_result)
-            return
+                if dry_result.get("status") != "empty":
+                    args.retry_failed = True
+                else:
+                    dry_result["mode"] = "dry_run_first"
+                    dry_result["aborted"] = True
+                    dry_result["reason"] = "queue empty"
+                    try:
+                        from publish_incidents import log_incident
+
+                        log_incident(
+                            pair=args.pair,
+                            stage="queue",
+                            error="queue empty at dry-run-first",
+                        )
+                    except Exception:
+                        pass
+                    _write_and_print(dry_result)
+                    return
+            else:
+                dry_result["mode"] = "dry_run_first"
+                dry_result["aborted"] = True
+                dry_result["reason"] = "queue empty"
+                try:
+                    from publish_incidents import log_incident
+
+                    log_incident(
+                        pair=args.pair,
+                        stage="queue",
+                        error="queue empty at dry-run-first",
+                    )
+                except Exception:
+                    pass
+                _write_and_print(dry_result)
+                return
 
     result = run_publish_batch(
         pair_id=args.pair,
