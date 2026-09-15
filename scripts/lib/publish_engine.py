@@ -120,7 +120,7 @@ def _publish_instagram_then_tiktok(
     instagram = post_zernio(ig_key, ig_payload)
     _pause_between_platforms()
     try:
-        tiktok = post_zernio(tt_key, tt_payload)
+        tiktok = _post_tiktok_with_capacity_draft_fallback(tt_key, tt_payload)
     except Exception as tt_exc:
         tt_err = str(tt_exc)
         meta = classify_failure_message(tt_err)
@@ -410,6 +410,40 @@ def build_instagram_grok_payload(
 ) -> dict:
     """Deprecated alias — keep for compatibility."""
     return build_instagram_mixed_payload(fields, hook_video_url, image_urls, account_id)
+
+
+def _is_tiktok_capacity_error(text: str) -> bool:
+    lower = text.lower()
+    return any(
+        x in lower
+        for x in (
+            "at capacity",
+            "quota_exhausted",
+            "direct posting is at capacity",
+            "tiktoksettings.draft",
+        )
+    )
+
+
+def _apply_tiktok_draft(payload: dict) -> dict:
+    draft = json.loads(json.dumps(payload, ensure_ascii=False))
+    draft.setdefault("tiktokSettings", {})["draft"] = True
+    return draft
+
+
+def _post_tiktok_with_capacity_draft_fallback(tt_key: str, tt_payload: dict) -> dict:
+    """Post TikTok; on capacity error retry with draft=true (Creator Inbox)."""
+    result = post_zernio(tt_key, tt_payload)
+    if zernio_response_ok(result):
+        return result
+    err_text = json.dumps(result, ensure_ascii=False)
+    if not _is_tiktok_capacity_error(err_text):
+        return result
+    draft_result = post_zernio(tt_key, _apply_tiktok_draft(tt_payload))
+    if zernio_response_ok(draft_result):
+        draft_result["tiktok_draft_fallback"] = True
+        return draft_result
+    return draft_result
 
 
 def build_tiktok_payload(fields: dict, image_urls: list[str], account_id: str) -> dict:
@@ -704,7 +738,7 @@ def process_record(
             "name": name,
             "airtable_id": rec["id"],
             "mode": "tiktok_resume",
-            "tiktok": post_zernio(tt_key, tt_payload),
+            "tiktok": _post_tiktok_with_capacity_draft_fallback(tt_key, tt_payload),
             "instagram": {"resumed": True, "partial_at": partial.get("at")},
         }
     elif tiktok_only:
@@ -712,7 +746,7 @@ def process_record(
         result = {
             "name": name,
             "airtable_id": rec["id"],
-            "tiktok": post_zernio(tt_key, tt_payload),
+            "tiktok": _post_tiktok_with_capacity_draft_fallback(tt_key, tt_payload),
             "mode": "tiktok_only",
         }
     elif has_video:
@@ -859,12 +893,19 @@ def run_publish_batch(
             retry_failed=retry_failed,
             include_needs_human=include_needs_human,
         )
-        records = [
-            r
-            for r in records
-            if r.get("fields", {}).get("Name") not in all_published
-            and r.get("fields", {}).get("Name") not in failed_names
-        ]
+        failed_in_state = set((state.get("failed") or {}).keys())
+        filtered: list[dict] = []
+        for r in records:
+            name = r.get("fields", {}).get("Name")
+            if name in failed_names:
+                continue
+            if retry_failed and name in failed_in_state:
+                filtered.append(r)
+                continue
+            if name in all_published:
+                continue
+            filtered.append(r)
+        records = filtered
 
     records = sort_queue_fifo(records)
     if not records:
