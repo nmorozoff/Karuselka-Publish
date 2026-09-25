@@ -91,6 +91,12 @@ def classify_failure_message(text: str) -> dict[str, Any]:
             "needs_human": False,
             "retryable": True,
         }
+    if "no dropbox carousel folder" in lower:
+        return {
+            "category": "orphan_airtable",
+            "needs_human": False,
+            "retryable": False,
+        }
     if "409" in lower or "conflict" in lower:
         return {
             "category": "conflict",

@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from publish_cleanup import assert_zernio_ok, cleanup_carousel_assets
+from publish_cleanup import assert_zernio_ok, cleanup_carousel_assets, purge_carousel_by_name
 from publish_failure import (
     classify_failure_message,
     failed_record,
@@ -492,6 +492,30 @@ def _is_dropbox_missing(exc: BaseException) -> bool:
     return "409" in text or "404" in text or "not_found" in text
 
 
+def _is_orphan_dropbox_error(exc: BaseException) -> bool:
+    text = str(exc)
+    return "No Dropbox carousel folder" in text and _is_dropbox_missing(exc)
+
+
+def _purge_orphan_queue_record(
+    env: dict[str, str],
+    queue_pair: dict,
+    rec: dict,
+    dropbox_token: str,
+) -> dict[str, Any]:
+    """Airtable-строка без папки в Dropbox — удалить строку, не блокировать FIFO."""
+    name = rec.get("fields", {}).get("Name", "")
+    return purge_carousel_by_name(
+        env=env,
+        queue_pair=queue_pair,
+        carousel_name=name,
+        fields=rec.get("fields", {}),
+        record_id=rec["id"],
+        dropbox_token=dropbox_token,
+        delete_dropbox_folder=delete_dropbox_folder,
+    )
+
+
 def dropbox_download_json(token: str, path: str) -> dict | None:
     req = urllib.request.Request(
         "https://content.dropboxapi.com/2/files/download",
@@ -872,8 +896,12 @@ def run_publish_batch(
 
     results: list[dict] = []
     errors: list[dict] = []
+    skipped_orphans: list[dict] = []
+    target = max(1, limit)
 
-    for rec in records[: max(1, limit)]:
+    for rec in records:
+        if len(results) >= target:
+            break
         carousel_name = rec.get("fields", {}).get("Name", "")
         try:
             res = process_record(
@@ -919,6 +947,19 @@ def run_publish_batch(
             results.append(res)
         except Exception as exc:  # noqa: BLE001
             err_text = str(exc)
+            if _is_orphan_dropbox_error(exc):
+                try:
+                    purge = _purge_orphan_queue_record(env, queue_pair, rec, dropbox_token)
+                    skipped_orphans.append(
+                        {
+                            "name": carousel_name,
+                            "reason": "orphan_airtable",
+                            "purge": purge.get("cleanup", {}),
+                        }
+                    )
+                    continue
+                except Exception as purge_exc:  # noqa: BLE001
+                    err_text = f"orphan purge failed for {carousel_name}: {purge_exc}"
             if err_text.startswith("PARTIAL_IG_OK|"):
                 tt_err = err_text.split("|", 1)[1]
                 if not dry_run:
@@ -971,6 +1012,7 @@ def run_publish_batch(
                     env=env,
                     dropbox_token=dropbox_token,
                 )
+            break
 
     if not dry_run:
         save_state(state, dropbox_token if os.environ.get("WORKER_STATE_BACKEND") == "dropbox" else None)
@@ -983,7 +1025,7 @@ def run_publish_batch(
         status = "partial"
     else:
         status = "error"
-    return {
+    out: dict[str, Any] = {
         "status": status,
         "pair": accounts_pair_id,
         "queue_pair": queue_pair_id,
@@ -992,3 +1034,6 @@ def run_publish_batch(
         "results": results,
         "at": datetime.now(timezone.utc).isoformat(),
     }
+    if skipped_orphans:
+        out["skipped_orphans"] = skipped_orphans
+    return out
