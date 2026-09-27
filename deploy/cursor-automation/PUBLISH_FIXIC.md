@@ -35,6 +35,7 @@ Fixic **обязателен** в конце каждого automation run, ес
 | Очередь не пуста, а «очередь пуста» | `queue_next_hint` / notify |
 | Dropbox 409 / path | legacy path, `find_carousel_dropbox_folder` |
 | Zernio media fetch failed | retry `--retry-failed`, проверить Dropbox shared links |
+| Airtable `PUBLIC_API_BILLING_LIMIT_EXCEEDED` | апгрейд плана / дождаться сброса месячной квоты в workspace settings |
 | Automation не в Runs | cron timezone UTC vs MSK, Enabled, repo/branch |
 | Preflight secrets | `materialize_cloud_env.py`, Cursor Runtime Secrets scope |
 
