@@ -36,16 +36,43 @@ def _direct_opener() -> urllib.request.OpenerDirector:
     return urllib.request.build_opener(urllib.request.ProxyHandler({}), https)
 
 
-def urlopen(req: urllib.request.Request, *, timeout: int = 60, retries: int = 3) -> Any:
+def _retry_delay_seconds(exc: BaseException, attempt: int) -> float | None:
+    """Seconds to wait before retry; None if the error should not be retried."""
+    if isinstance(exc, urllib.error.HTTPError) and exc.code == 429:
+        ra = exc.headers.get("Retry-After") if exc.headers else None
+        if ra:
+            try:
+                return max(1.0, float(ra))
+            except ValueError:
+                pass
+        return min(30.0, 2.0 ** (attempt + 1))
+    if isinstance(exc, urllib.error.HTTPError) and exc.code in (500, 502, 503, 504):
+        return 0.5 * (attempt + 1)
+    if isinstance(exc, (TimeoutError, urllib.error.URLError)):
+        return 0.5 * (attempt + 1)
+    return None
+
+
+def urlopen(req: urllib.request.Request, *, timeout: int = 60, retries: int = 5) -> Any:
     last_err: Exception | None = None
     with _without_proxy_env():
         for attempt in range(max(1, retries)):
             try:
                 return _direct_opener().open(req, timeout=timeout)
+            except urllib.error.HTTPError as exc:
+                last_err = exc
+                delay = _retry_delay_seconds(exc, attempt)
+                if delay is not None and attempt + 1 < retries:
+                    time.sleep(delay)
+                    continue
+                raise
             except Exception as exc:  # noqa: BLE001
                 last_err = exc
-                if attempt + 1 < retries:
-                    time.sleep(0.5 * (attempt + 1))
+                delay = _retry_delay_seconds(exc, attempt)
+                if delay is not None and attempt + 1 < retries:
+                    time.sleep(delay)
+                    continue
+                break
     raise RuntimeError(f"HTTP unreachable {req.full_url}: {last_err}") from last_err
 
 
