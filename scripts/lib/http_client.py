@@ -36,12 +36,47 @@ def _direct_opener() -> urllib.request.OpenerDirector:
     return urllib.request.build_opener(urllib.request.ProxyHandler({}), https)
 
 
+def _http_error_detail(exc: urllib.error.HTTPError) -> str:
+    cached = getattr(exc, "_karuselka_body", None)
+    if isinstance(cached, str):
+        return cached
+    try:
+        detail = exc.read().decode("utf-8", errors="replace")
+    except Exception:  # noqa: BLE001
+        detail = str(exc)
+    exc._karuselka_body = detail  # noqa: SLF001
+    return detail
+
+
+def _is_airtable_billing_limit(exc: urllib.error.HTTPError) -> bool:
+    if exc.code != 429:
+        return False
+    detail = _http_error_detail(exc).lower()
+    return "billing" in detail and "limit" in detail
+
+
 def urlopen(req: urllib.request.Request, *, timeout: int = 60, retries: int = 3) -> Any:
     last_err: Exception | None = None
     with _without_proxy_env():
         for attempt in range(max(1, retries)):
             try:
                 return _direct_opener().open(req, timeout=timeout)
+            except urllib.error.HTTPError as exc:
+                if _is_airtable_billing_limit(exc):
+                    detail = _http_error_detail(exc)
+                    raise RuntimeError(
+                        f"Airtable API billing limit exceeded {req.full_url}: {detail[:2000]}"
+                    ) from exc
+                last_err = exc
+                if exc.code == 429 and attempt + 1 < retries:
+                    retry_after = exc.headers.get("Retry-After")
+                    delay = float(retry_after) if retry_after and retry_after.isdigit() else 30.0
+                    time.sleep(min(delay, 120.0))
+                    continue
+                if attempt + 1 < retries and exc.code in (502, 503, 504):
+                    time.sleep(0.5 * (attempt + 1))
+                    continue
+                raise
             except Exception as exc:  # noqa: BLE001
                 last_err = exc
                 if attempt + 1 < retries:
