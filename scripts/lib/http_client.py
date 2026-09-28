@@ -36,16 +36,36 @@ def _direct_opener() -> urllib.request.OpenerDirector:
     return urllib.request.build_opener(urllib.request.ProxyHandler({}), https)
 
 
+def _retry_delay_for_rate_limit(exc: urllib.error.HTTPError, attempt: int) -> float:
+    ra = exc.headers.get("Retry-After") or exc.headers.get("retry-after")
+    if ra:
+        try:
+            return min(float(ra) + 1.0, 120.0)
+        except ValueError:
+            pass
+    return min(15.0 * (attempt + 1), 90.0)
+
+
 def urlopen(req: urllib.request.Request, *, timeout: int = 60, retries: int = 3) -> Any:
     last_err: Exception | None = None
+    rate_limit_retries = int(os.environ.get("HTTP_429_MAX_RETRIES", "8"))
+    max_attempts = max(max(1, retries), rate_limit_retries)
     with _without_proxy_env():
-        for attempt in range(max(1, retries)):
+        for attempt in range(max_attempts):
             try:
                 return _direct_opener().open(req, timeout=timeout)
+            except urllib.error.HTTPError as exc:
+                last_err = exc
+                if exc.code in (429, 503) and attempt + 1 < max_attempts:
+                    time.sleep(_retry_delay_for_rate_limit(exc, attempt))
+                    continue
+                raise
             except Exception as exc:  # noqa: BLE001
                 last_err = exc
                 if attempt + 1 < retries:
                     time.sleep(0.5 * (attempt + 1))
+                    continue
+                break
     raise RuntimeError(f"HTTP unreachable {req.full_url}: {last_err}") from last_err
 
 
@@ -69,6 +89,11 @@ def http_json(
             return json.loads(raw) if raw.strip() else {}
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", errors="replace")
+        if e.code == 429 and "PUBLIC_API_BILLING_LIMIT_EXCEEDED" in detail:
+            raise RuntimeError(
+                "Airtable monthly API limit exceeded (PUBLIC_API_BILLING_LIMIT_EXCEEDED). "
+                "Upgrade plan or wait for billing reset — publish queue cannot be read."
+            ) from e
         raise RuntimeError(f"HTTP {e.code} {url}: {detail[:2000]}") from e
 
 
