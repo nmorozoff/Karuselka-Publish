@@ -2,79 +2,85 @@
 
 Единственный мост между **Karuselka-emdr** (фабрика) и **karuselka-publish** (доставка).
 
-## Поток
+## Поток (Dropbox-first)
 
 ```text
 Фабрика (export_publish_bundle.py)
+  → 6 вариантов стиля (a–f), каждый в свою папку
   → Dropbox /Content_Plan/Queue/{Name}/
-  → Airtable row (единая таблица, FIFO по createdTime / порядку строк)
-        ↓
-Publish (publish_worker.py --pair pairN)
-  → берёт ПЕРВУЮ строку глобальной очереди (поле «Пара» НЕ фильтрует)
-  → публикует в Instagram+TikTok аккаунты pairN (слот расписания)
-  → cleanup: удалить строку Airtable + папку Queue/{Name}
-  → Макс-бот notify
+  → manifest.json + caption.txt (+ slide-*.png, опционально slide-01.mp4)
+  → Airtable НЕ используется при publish_queue_backend=dropbox
+
+Publish (publish_worker.py --pair pairN --pick top|bottom|fifo)
+  → список ready-папок в Queue (6/7/9 PNG)
+  → выбор по --pick (баланс стилей между слотами)
+  → публикует в Instagram+TikTok аккаунты pairN
+  → cleanup: удалить папку Queue/{Name} (полный успех)
+  → worker-state.json + Макс-бот
 ```
 
-**Маршрутизация стилей → аккаунты:** не через столбец Airtable, а через **расписание automation**:
+**Имена папок:** `crsl_{YYYYMMDD}_{HHMM}_{variant}_{styleSlug}_{rand4}`  
+Пример: `crsl_20260928_1410_a_expert-light_4821`
 
-| Слот MSK | `--pair` | Куда уходит первая карусель в очереди |
-|----------|----------|--------------------------------------|
-| 10:00, 17:00, 20:00 | pair1 | IG/TikTok pair1 |
-| 11:00, 18:00, 21:00 | pair2 | IG/TikTok pair2 |
-| 12:00, 19:00, 22:00 | pair3 | IG/TikTok pair3 |
+## Pick по automation (согласовано)
 
-Фабрика кладёт карусели любого стиля в одну очередь; какой аккаунт получит конкретную карусель — определяет **кто первый забрал слот** после её появления в Queue.
+Ready-папки сортируются по `Name` ASC.
 
-## Airtable
+| Слот MSK | `--pair` | `--pick` |
+|----------|----------|----------|
+| 10:00 | pair1 | **top** |
+| 20:00 | pair1 | **bottom** |
+| 11:00 | pair2 | **bottom** |
+| 21:00 | pair2 | **top** |
+| 12:00 | pair3 | **fifo** |
+| 22:00 | pair3 | **fifo** |
 
-**Единая таблица:** `Каруселька Queue` (`tblIf0GuVmiDj199M`).
+`--pair` = **куда публиковать** (Zernio IG/TT), не фильтр по стилю.
 
-| Поле | Смысл |
-|------|-------|
-| `Name` | Имя папки карусели |
-| `Описание карусели` | Caption Instagram |
-| `TikTok заголовок` | Заголовок TikTok (≤90 символов) |
-| `TikTok описание` | Описание TikTok |
-| `Пара` | **Справочно** (фабрика); publish **игнорирует** при выборе строки |
+## Конфиг
 
-Конфиг: `airtable_queue` в `accounts-pairs.json`.
+`publish-memory/accounts-pairs.json`:
+
+- `publish_queue_backend`: `"dropbox"` (default) или `"airtable"` (legacy)
+- `queue_dropbox_root`: `/Content_Plan/Queue`
+- `airtable_queue` — только mapping имён полей для caption (legacy + manifest)
+
+Env:
+
+- `PUBLISH_QUEUE_BACKEND=dropbox`
+- `EXPORT_SKIP_AIRTABLE=1` на фабрике (авто при dropbox backend)
 
 ## Dropbox
 
 **Единая очередь:** `/Content_Plan/Queue/{Name}/`
 
-Конфиг: `queue_dropbox_root` в `publish-memory/accounts-pairs.json`.
-
-Legacy fallback (если папка ещё в старом месте): `/Content_Plan/Pair1|2|3/{Name}/`.
-
 ### Файлы в папке карусели
 
-| Файл | Instagram | TikTok |
-|------|-----------|--------|
-| `slide-01.mp4` | ✅ hook (mixed carousel) | ❌ |
-| `slide-01.png` … `slide-06.png` | slide-02..06 или все 6 | все 6 PNG |
-| `caption.txt` | справочно | — |
-| `manifest.json` | контракт export | — |
+| Файл | Назначение |
+|------|------------|
+| `slide-01.mp4` | Instagram hook (mixed) |
+| `slide-01.png` … `slide-06.png` | IG + TikTok |
+| `caption.txt` | Instagram caption |
+| `manifest.json` | variant, style_id, tiktok title/desc, createdAt |
 
 ## Zernio
 
-- **Instagram:** `slide-01.mp4` + `slide-02..06.png` (mixed) или все PNG
-- **TikTok:** `slide-01..06.png`, `auto_add_music: true`
+- **Instagram:** mixed или photo carousel
+- **TikTok:** все PNG, `auto_add_music: true`
 - Режим: `PUBLISH_MODE=grok_hook`
 
 ## Worker state
 
 Dropbox `/Content_Plan/.karuselka/worker-state.json` (cloud):
 
-- `published` / `published_pair2` / `published_pair3` — история по слотам
-- `failed` — глобально по имени карусели (блокирует очередь до retry/purge)
+- `published` / `published_pair2` / `published_pair3`
+- `failed` — глобально по имени папки
 
 ## Команды
 
 ```bash
 python scripts/publish_status.py
-python scripts/publish_worker.py --pair pair2 --limit 1 --dry-run-first
+python scripts/publish_worker.py --pair pair1 --pick top --limit 1 --dry-run-first
+python scripts/publish_worker.py --pair pair2 --pick bottom --limit 1 --dry-run-first
+python scripts/publish_worker.py --pair pair3 --pick fifo --limit 1 --dry-run-first
 ```
-
-`--pair` = **куда публиковать** (Zernio аккаунты), не фильтр Airtable.

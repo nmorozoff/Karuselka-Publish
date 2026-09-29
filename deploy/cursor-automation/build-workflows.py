@@ -13,13 +13,14 @@ OUT_JSON = ROOT / "workflows"
 OUT_TXT = ROOT / "instructions"
 
 # Cron UTC = MSK - 3. Два прогона в день: утро + вечер (по 1 карусели на пару).
+# (pair, time_msk, cron, slug, pick)
 JOBS = [
-    ("pair1", "10:00", "0 7 * * *", "karuselka-publish-pair1-1000"),
-    ("pair1", "20:00", "0 17 * * *", "karuselka-publish-pair1-2000"),
-    ("pair2", "11:00", "0 8 * * *", "karuselka-publish-pair2-1100"),
-    ("pair2", "21:00", "0 18 * * *", "karuselka-publish-pair2-2100"),
-    ("pair3", "12:00", "0 9 * * *", "karuselka-publish-pair3-1200"),
-    ("pair3", "22:00", "0 19 * * *", "karuselka-publish-pair3-2200"),
+    ("pair1", "10:00", "0 7 * * *", "karuselka-publish-pair1-1000", "top"),
+    ("pair1", "20:00", "0 17 * * *", "karuselka-publish-pair1-2000", "bottom"),
+    ("pair2", "11:00", "0 8 * * *", "karuselka-publish-pair2-1100", "bottom"),
+    ("pair2", "21:00", "0 18 * * *", "karuselka-publish-pair2-2100", "top"),
+    ("pair3", "12:00", "0 9 * * *", "karuselka-publish-pair3-1200", "fifo"),
+    ("pair3", "22:00", "0 19 * * *", "karuselka-publish-pair3-2200", "fifo"),
 ]
 
 ENV_PREFIX = (
@@ -33,7 +34,7 @@ def agent_instruction(pair: str) -> str:
 Репозиторий: nmorozoff/Karuselka-Publish
 Не генерируешь слайды, caption, Kie, Grok.
 
-Пара: {pair}
+Zernio-слот: {pair} (куда публиковать). Очередь — глобальный FIFO, без поля «Пара».
 Лимит: 1 карусель за run.
 
 ПРАВИЛО: при ошибке не останавливайся сразу.
@@ -109,8 +110,8 @@ def schedule_lines() -> str:
         "Если cron в UTC (MSK минус 3 часа):",
         "",
     ]
-    for pair, time_msk, cron, slug in JOBS:
-        lines.append(f"{slug}  pair={pair}  MSK={time_msk}  cron_UTC={cron}")
+    for pair, time_msk, cron, slug, pick in JOBS:
+        lines.append(f"{slug}  pair={pair}  pick={pick}  MSK={time_msk}  cron_UTC={cron}")
     lines.extend(
         [
             "",
@@ -127,14 +128,18 @@ def schedule_lines() -> str:
     return "\n".join(lines) + "\n"
 
 
-def build_json(pair: str, time_msk: str, cron: str, slug: str) -> dict:
+def build_json(pair: str, time_msk: str, cron: str, slug: str, pick: str) -> dict:
+    pick_block = (
+        f"\n=== PICK (этот cron) ===\n--pick {pick}\n"
+        f"{ENV_PREFIX} python3 scripts/publish_worker.py --pair {pair} --pick {pick} --limit 1 --dry-run-first\n"
+    )
     return {
         "name": f"Karuselka Publish {pair} {time_msk} MSK",
-        "description": f"Автопубликация 1 карусели ({pair}) в {time_msk} MSK (cron UTC).",
+        "description": f"Автопубликация 1 карусели ({pair}) в {time_msk} MSK, pick={pick}.",
         "workflow": {
             "triggers": [{"cron": {"cron": cron}}],
             "actions": [],
-            "prompts": [load_instruction(pair)],
+            "prompts": [load_instruction(pair) + pick_block],
             "model": "",
             "gitConfig": {"repo": REPO, "branch": BRANCH},
             "memoryEnabled": False,
@@ -150,14 +155,15 @@ def main() -> None:
     (OUT_TXT / "SCHEDULE.txt").write_text(schedule_lines(), encoding="utf-8")
 
     index = []
-    for pair, time_msk, cron, slug in JOBS:
-        data = build_json(pair, time_msk, cron, slug)
+    for pair, time_msk, cron, slug, pick in JOBS:
+        data = build_json(pair, time_msk, cron, slug, pick)
         path = OUT_JSON / f"{slug}.json"
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         index.append(
             {
                 "id": slug,
                 "pair": pair,
+                "pick": pick,
                 "time_msk": time_msk,
                 "cron": cron,
                 "instruction_file": f"instructions/{pair}.txt",

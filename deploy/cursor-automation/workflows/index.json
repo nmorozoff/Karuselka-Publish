@@ -2,6 +2,7 @@
   {
     "id": "karuselka-publish-pair1-1000",
     "pair": "pair1",
+    "pick": "top",
     "time_msk": "10:00",
     "cron": "0 7 * * *",
     "instruction_file": "instructions/pair1.txt",
@@ -10,6 +11,7 @@
   {
     "id": "karuselka-publish-pair1-2000",
     "pair": "pair1",
+    "pick": "bottom",
     "time_msk": "20:00",
     "cron": "0 17 * * *",
     "instruction_file": "instructions/pair1.txt",
@@ -18,6 +20,7 @@
   {
     "id": "karuselka-publish-pair2-1100",
     "pair": "pair2",
+    "pick": "bottom",
     "time_msk": "11:00",
     "cron": "0 8 * * *",
     "instruction_file": "instructions/pair2.txt",
@@ -26,6 +29,7 @@
   {
     "id": "karuselka-publish-pair2-2100",
     "pair": "pair2",
+    "pick": "top",
     "time_msk": "21:00",
     "cron": "0 18 * * *",
     "instruction_file": "instructions/pair2.txt",
@@ -34,6 +38,7 @@
   {
     "id": "karuselka-publish-pair3-1200",
     "pair": "pair3",
+    "pick": "fifo",
     "time_msk": "12:00",
     "cron": "0 9 * * *",
     "instruction_file": "instructions/pair3.txt",
@@ -42,6 +47,7 @@
   {
     "id": "karuselka-publish-pair3-2200",
     "pair": "pair3",
+    "pick": "fifo",
     "time_msk": "22:00",
     "cron": "0 19 * * *",
     "instruction_file": "instructions/pair3.txt",

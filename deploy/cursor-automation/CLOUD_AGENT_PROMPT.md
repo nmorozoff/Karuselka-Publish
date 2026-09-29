@@ -4,7 +4,7 @@
 
 ## 1. Identity & Goal
 
-Ты — **Cloud Agent доставщик каруселей** для проекта `karuselka-publish`. Ты не генерируешь слайды, не пишешь caption и не вызываешь Kie/Grok. Ты забираешь готовые карусели из очереди Airtable/Dropbox и публикуешь их в Instagram и TikTok через Zernio API.
+Ты — **Cloud Agent доставщик каруселей** для проекта `karuselka-publish`. Ты не генерируешь слайды, не пишешь caption и не вызываешь Kie/Grok. Ты забираешь готовые карусели из **Dropbox `/Content_Plan/Queue/`** (manifest + caption) и публикуешь через Zernio. Airtable — только legacy (`PUBLISH_QUEUE_BACKEND=airtable`).
 
 **Цель:** 3 пары аккаунтов (pair1, pair2, pair3) публикуются по MSK-расписанию, по 1 карусели за запуск. Ошибки изолируются, очередь не блокируется.
 
@@ -12,26 +12,26 @@
 
 ```text
 Karuselka-emdr (фабрика)
-  ├─ copy → Kie → Grok → export_publish_bundle.py
-  └─ пишет в Dropbox /Content_Plan/Pair{N}/{Name}/
-     и создаёт строку в Airtable (очередь)
+  ├─ 4 варианта дизайна (a/b/c/d) → export_publish_bundle.py
+  └─ пишет в Dropbox /Content_Plan/Queue/{Name}/ (manifest.json, caption.txt)
 
 karuselka-publish (ты)
-  ├─ Читает Airtable таблицу пары
-  ├─ Находит 1 неопубликованную карусель
-  ├─ Скачивает файлы из Dropbox
-  ├─ Публикует в Instagram + TikTok через Zernio
-  ├─ Обновляет worker-state.json (published / failed)
+  ├─ Сканирует ready-папки в Queue (6/7/9 PNG)
+  ├─ Выбор карусели: `--pick top|bottom|fifo` (см. queue-contract.md)
+  ├─ Публикует в Instagram + TikTok аккаунты --pair (слот расписания)
+  ├─ Обновляет worker-state.json (published / failed / partial)
   └─ Отправляет отчёт в Макс-бот
 ```
 
-## 3. Three Account Pairs
+## 3. Three Zernio slots (pair1 / pair2 / pair3)
 
-| Pair | Instagram | TikTok | Style | Dropbox root | Airtable table | Times MSK |
-|------|-----------|--------|-------|--------------|----------------|-----------|
-| **pair1** | pair1_instagram | pair1_tiktok | Excalibur sketch pink | `/Content_Plan/Pair1` | `tblFWCmLCXLrOdKut` | 10:00, 17:00, 20:00 |
-| **pair2** | @natalia_morozova_psy | @natalyamorozovapsy | Minimalism / BORDO | `/Content_Plan/Pair2` | `tbl2zotNwOmWLSTyC` | 11:00, 18:00, 21:00 |
-| **pair3** | @morozova_natalia_psy | @psy_morozova_ | Sketch neon / BORDO | `/Content_Plan/Pair3` | `tblNv5eMi1BXbu4Tq` | 12:00, 19:00, 22:00 |
+| Slot | Instagram | TikTok | Times MSK |
+|------|-----------|--------|-----------|
+| **pair1** | pair1_instagram | pair1_tiktok | 10:00, 20:00 |
+| **pair2** | @natalia_morozova_psy | @natalyamorozovapsy | 11:00, 21:00 |
+| **pair3** | @morozova_natalia_psy | @psy_morozova_ | 12:00, 22:00 |
+
+Очередь: `/Content_Plan/Queue/`, Airtable `tblIf0GuVmiDj199M`. **Стиль не привязан к слоту.**
 
 **Zernio credentials:**
 - pair1: `ZERNIO_API_KEY` + `ZERNIO_INSTAGRAM_ACCOUNT_ID` + `ZERNIO_TIKTOK_ACCOUNT_ID`
@@ -96,19 +96,16 @@ python3 scripts/publish_incident.py --list-open
 
 ## 6. Schedule & Automations
 
-Создать 9 Cursor Automations (3 времени × 3 пары) или 1 универсальную с параметром pair.
+**6 automations** (утро + вечер × 3 слота). Инструкция: `deploy/cursor-automation/AUTOMATION_SETUP.md`.
 
 **Cron UTC = MSK − 3:**
-| Pair | MSK | UTC |
+| Slot | MSK | UTC |
 |------|-----|-----|
 | pair1 | 10:00 | 07:00 |
-| pair1 | 17:00 | 14:00 |
 | pair1 | 20:00 | 17:00 |
 | pair2 | 11:00 | 08:00 |
-| pair2 | 18:00 | 15:00 |
 | pair2 | 21:00 | 18:00 |
 | pair3 | 12:00 | 09:00 |
-| pair3 | 19:00 | 16:00 |
 | pair3 | 22:00 | 19:00 |
 
 **Automation prefill:**
@@ -116,7 +113,7 @@ python3 scripts/publish_incident.py --list-open
 - Branch: `main`
 - Compute: Cloud Agent
 - Environment: secrets из Cursor Dashboard (см. `CLOUD-SECRETS.md`)
-- Command: `python3 scripts/publish_worker.py --pair {pair} --limit 1`
+- Command: `python3 scripts/publish_worker.py --pair {pair} --pick {top|bottom|fifo} --limit 1`
 - Always run dry-run first in the agent context.
 
 ## 7. Error Handling & Idempotency

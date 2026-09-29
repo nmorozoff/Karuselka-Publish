@@ -1,0 +1,25 @@
+=== ОЧЕРЕДЬ (Dropbox Queue, без Airtable) ===
+Фабрика: 6 стилей (a–f) → /Content_Plan/Queue/{Name}/ + manifest.json + caption.txt.
+Имя: crsl_YYYYMMDD_HHMM_{variant}_{styleSlug}_{rand4}.
+
+Ready = 6/7/9 PNG в папке, не в published/failed worker-state.
+
+Выбор карусели (--pick, сортировка Name ASC):
+- top = самая «ранняя» по имени
+- bottom = самая «поздняя»
+- fifo = как top
+
+Слоты pick (см. shared/queue-contract.md):
+pair1 утро top, вечер bottom | pair2 утро bottom, вечер top | pair3 fifo
+
+--pair = только Zernio IG/TikTok слота, НЕ фильтр стиля.
+
+ENV:
+WORKER_STATE_BACKEND=dropbox WORKER_STATE_DROPBOX_PATH=/Content_Plan/.karuselka/worker-state.json
+PUBLISH_QUEUE_BACKEND=dropbox
+
+После полного успеха: cleanup удаляет папку Queue (Airtable не трогаем).
+Partial IG (TikTok spam): папку НЕ удалять — retry --tiktok-only.
+
+Команда:
+$ENV python3 scripts/publish_worker.py --pair {pair} --pick {pick} --limit 1 --dry-run-first

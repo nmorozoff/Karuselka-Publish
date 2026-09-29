@@ -28,12 +28,14 @@ from http_client import http_json, urlopen
 from publish_config import (
     load_runtime_env,
     pair_config,
+    queue_backend,
     queue_dropbox_root,
     resolve_carousel_dropbox_path,
     zernio_api_key_for_platform,
     zernio_instagram_account_id,
     zernio_tiktok_account_id,
 )
+from publish_queue_dropbox import apply_pick, list_dropbox_queue_records
 from worker_state import load_state, save_state
 
 CLOUD_RUN_URL = os.environ.get(
@@ -53,7 +55,10 @@ PUBLISH_MODE = os.environ.get("PUBLISH_MODE", "grok_hook").strip().lower()
 
 
 def list_queue_records(env: dict[str, str], pair: dict) -> list[dict]:
-    """Все строки единой очереди Airtable (без фильтра по полю Пара)."""
+    """Очередь: Dropbox Queue или Airtable (legacy)."""
+    if queue_backend() == "dropbox":
+        token = get_access_token(env)
+        return list_dropbox_queue_records(token)
     at = pair["airtable"]
     base = at["base_id"]
     table = at["table_id"]
@@ -175,6 +180,22 @@ def sort_queue_fifo(records: list[dict]) -> list[dict]:
     return sorted(records, key=_record_created_time)
 
 
+def sort_queue_ready(records: list[dict], backend: str | None = None) -> list[dict]:
+    backend = backend or queue_backend()
+    if backend == "dropbox":
+        return sorted(records, key=lambda r: str(r.get("fields", {}).get("Name") or ""))
+    return sort_queue_fifo(records)
+
+
+def _cleanup_record_id(rec: dict) -> str | None:
+    rid = rec.get("id")
+    if not rid:
+        return None
+    if str(rid).startswith("dropbox:"):
+        return None
+    return str(rid)
+
+
 def _all_published_names(state: dict) -> set[str]:
     names: set[str] = set()
     for key in ("published", "published_pair2", "published_pair3"):
@@ -203,29 +224,36 @@ def queue_next_hint(
     state: dict,
     *,
     exclude_name: str | None = None,
+    pick: str = "fifo",
 ) -> tuple[str | None, int]:
-    """Return (next carousel name, ready count) — глобальная FIFO-очередь."""
+    """Return (next carousel name, ready count) — глобальная очередь."""
     pair = pair_config(pair_id)
-    ready = _ready_records(list_queue_records(env, pair), state)
+    backend = queue_backend()
+    ready = sort_queue_ready(_ready_records(list_queue_records(env, pair), state), backend)
     if exclude_name:
         ready = [r for r in ready if r.get("fields", {}).get("Name") != exclude_name]
-    ready = sort_queue_fifo(ready)
     if not ready:
         return None, 0
-    name = ready[0].get("fields", {}).get("Name")
+    from publish_queue_dropbox import apply_pick
+
+    next_rec = apply_pick(ready, pick)[0]
+    name = next_rec.get("fields", {}).get("Name")
     return name, len(ready)
 
 
 def get_queue_summary(env: dict[str, str] | None = None) -> dict[str, Any]:
-    """Статус очереди: единая FIFO + per-pair published stats."""
+    """Статус очереди: Dropbox или Airtable + per-pair published stats."""
     env = env or load_runtime_env()
     token = get_access_token(env)
     state = load_state(token if os.environ.get("WORKER_STATE_BACKEND") == "dropbox" else None)
+    backend = queue_backend()
 
     queue_pair = pair_config("pair1")
     all_records = list_queue_records(env, queue_pair)
-    ready = sort_queue_fifo(_ready_records(all_records, state))
-    next_name = ready[0].get("fields", {}).get("Name") if ready else None
+    ready = sort_queue_ready(_ready_records(all_records, state), backend)
+    from publish_queue_dropbox import apply_pick
+
+    next_name = apply_pick(ready, "fifo")[0].get("fields", {}).get("Name") if ready else None
     failed = {
         name
         for name, meta in (state.get("failed") or {}).items()
@@ -236,22 +264,24 @@ def get_queue_summary(env: dict[str, str] | None = None) -> dict[str, Any]:
     for pair_id in ("pair1", "pair2", "pair3"):
         published = _load_published_set(state, pair_id)
         pairs_summary[pair_id] = {
-            "airtable_total": len(all_records),
+            "queue_total": len(all_records),
             "published": len(published),
             "failed": len([r for r in all_records if r.get("fields", {}).get("Name") in failed]),
             "ready": len(ready),
             "next_fifo": next_name,
             "queue_folder": queue_dropbox_root(),
-            "routing": "global_fifo_to_run_pair",
+            "routing": "global_queue_to_run_pair",
+            "pick_note": "use --pick top|bottom|fifo per automation slot",
         }
 
     return {
         "at": datetime.now(timezone.utc).isoformat(),
         "queue_folder": queue_dropbox_root(),
-        "queue_mode": "global_fifo",
+        "queue_mode": f"global_{backend}",
+        "queue_backend": backend,
         "next_fifo": next_name,
         "ready": len(ready),
-        "airtable_total": len(all_records),
+        "queue_total": len(all_records),
         "pairs": pairs_summary,
         "worker_state_path": str(state.get("_path", "publish-memory/worker-state.json")),
     }
@@ -784,7 +814,7 @@ def process_record(
             result["cleanup"] = cleanup_carousel_assets(
                 env=env,
                 queue_pair=queue_pair,
-                record_id=rec["id"],
+                record_id=_cleanup_record_id(rec),
                 dropbox_token=dropbox_token,
                 dropbox_folder=dropbox_folder,
                 carousel_name=name,
@@ -839,6 +869,7 @@ def run_publish_batch(
     include_published: bool = False,
     retry_failed: bool = False,
     include_needs_human: bool = False,
+    pick: str = "fifo",
 ) -> dict[str, Any]:
     env = load_runtime_env()
     accounts_pair_id = accounts_pair_id or pair_id
@@ -849,6 +880,7 @@ def run_publish_batch(
     state = load_state(dropbox_token if os.environ.get("WORKER_STATE_BACKEND") == "dropbox" else None)
     published = _load_published_set(state, accounts_pair_id)
     all_published = _all_published_names(state)
+    backend = queue_backend()
     records = list_queue_records(env, queue_pair)
 
     if name:
@@ -866,14 +898,17 @@ def run_publish_batch(
             and r.get("fields", {}).get("Name") not in failed_names
         ]
 
-    records = sort_queue_fifo(records)
+    records = sort_queue_ready(records, backend)
+    if not name and pick:
+        records = apply_pick(records, pick)
+    records = records[: max(1, limit)]
     if not records:
         return {"status": "empty", "message": "Queue empty or all published", "results": []}
 
     results: list[dict] = []
     errors: list[dict] = []
 
-    for rec in records[: max(1, limit)]:
+    for rec in records:
         carousel_name = rec.get("fields", {}).get("Name", "")
         try:
             res = process_record(
@@ -987,6 +1022,8 @@ def run_publish_batch(
         "status": status,
         "pair": accounts_pair_id,
         "queue_pair": queue_pair_id,
+        "queue_backend": backend,
+        "pick": pick,
         "processed": len(results),
         "errors": errors,
         "results": results,

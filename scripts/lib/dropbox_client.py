@@ -83,6 +83,46 @@ def upload_file(path: str, content: bytes, token: str) -> None:
         resp.read()
 
 
+def list_folder_entries(token: str, dropbox_folder: str) -> list[dict]:
+    import time
+
+    last_err: Exception | None = None
+    for attempt in range(5):
+        req = urllib.request.Request(
+            "https://api.dropboxapi.com/2/files/list_folder",
+            data=json.dumps({"path": dropbox_folder, "recursive": False}).encode(),
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urlopen(req, timeout=60, retries=2) as resp:
+                return json.loads(resp.read().decode()).get("entries", [])
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+            time.sleep(0.8 * (attempt + 1))
+    raise RuntimeError(f"Dropbox list_folder failed for {dropbox_folder}: {last_err}") from last_err
+
+
+def download_file_text(token: str, path: str) -> str | None:
+    req = urllib.request.Request(
+        "https://content.dropboxapi.com/2/files/download",
+        headers={"Authorization": f"Bearer {token}", "Dropbox-API-Arg": json.dumps({"path": path})},
+        method="POST",
+    )
+    try:
+        with urlopen(req, timeout=60) as resp:
+            return resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        if e.code in (409, 404):
+            return None
+        raise
+    except RuntimeError as exc:
+        text = str(exc).lower()
+        if "409" in text or "404" in text or "not_found" in text:
+            return None
+        raise
+
+
 def upload_directory(local_dir: Path, dropbox_folder: str, token: str) -> int:
     create_folder(dropbox_folder, token)
     count = 0

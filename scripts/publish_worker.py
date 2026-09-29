@@ -54,6 +54,12 @@ def main() -> None:
         action="store_true",
         help="При --retry-failed включать spam/format/ownership (обычно бесполезно)",
     )
+    parser.add_argument(
+        "--pick",
+        default="fifo",
+        choices=["top", "bottom", "fifo"],
+        help="Выбор из ready-очереди: top/bottom по имени папки, fifo=top",
+    )
     args = parser.parse_args()
 
     if args.dry_run_first:
@@ -69,6 +75,7 @@ def main() -> None:
             include_published=args.include_published,
             retry_failed=args.retry_failed,
             include_needs_human=args.include_needs_human,
+            pick=args.pick,
         )
         if dry_result.get("status") == "error":
             dry_result["mode"] = "dry_run_first"
@@ -117,6 +124,7 @@ def main() -> None:
         include_published=args.include_published,
         retry_failed=args.retry_failed,
         include_needs_human=args.include_needs_human,
+        pick=args.pick,
     )
     _write_and_print(result)
 

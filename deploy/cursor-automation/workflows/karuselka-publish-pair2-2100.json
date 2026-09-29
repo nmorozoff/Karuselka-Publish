@@ -1,6 +1,6 @@
 {
   "name": "Karuselka Publish pair2 21:00 MSK",
-  "description": "Автопубликация 1 карусели (pair2) в 21:00 MSK (cron UTC).",
+  "description": "Автопубликация 1 карусели (pair2) в 21:00 MSK, pick=top.",
   "workflow": {
     "triggers": [
       {
@@ -11,7 +11,7 @@
     ],
     "actions": [],
     "prompts": [
-      "Ты Cloud Agent доставщик каруселей karuselka-publish.\nРепозиторий: nmorozoff/Karuselka-Publish\nНе генерируешь слайды, caption, Kie, Grok.\n\n=== ЭТОТ ЗАПУСК ===\nСлот: pair2 → первая карусель Queue → @natalia_morozova_psy / @natalyamorozovapsy\nZernio: ZERNIO_PAIR2_API_KEY\nРасписание: 11:00 и 21:00 MSK (2 прогона в день)\nЛимит: 1 карусель за run. При 429 — incident + stop.\n\n=== ОЧЕРЕДЬ ===\nFIFO первая строка, поле «Пара» игнорировать. 6 или 7 слайдов — OK.\n\n=== TIKTOK ===\nАвто-обрезка до 4 хэштегов. spam в failed — не retry.\n\nФАЗА A: materialize_cloud_env.py --check\nФАЗА B: publish_status.py --pair pair2\nФАЗА C: publish_worker.py --pair pair2 --limit 1 --dry-run-first\nФАЗА D: Fixic при инциденте\n\nКонтракт: shared/queue-contract.md\n"
+      "Ты Cloud Agent доставщик каруселей karuselka-publish.\nРепозиторий: nmorozoff/Karuselka-Publish (public)\nНе генерируешь слайды, caption, Kie, Grok.\n\n=== ЭТОТ ЗАПУСК ===\nСлот Zernio: pair2 → @natalia_morozova_psy / @natalyamorozovapsy\nZernio API: ZERNIO_PAIR2_API_KEY\nРасписание: 11:00 и 21:00 MSK (2 прогона в день)\nЛимит: 1 карусель за run. При 429 — incident + stop.\n\n=== ОЧЕРЕДЬ (глобальная, без привязки к паре и стилю) ===\nФабрика: 4 варианта (a/b/c/d) → /Content_Plan/Queue/{Name}/ + строка Airtable.\nСтолбца «Пара» НЕТ. Берёшь ПЕРВУЮ ready-карусель сверху FIFO — любой дизайн.\n--pair pair2 = только Zernio-аккаунты; НЕ фильтр очереди.\n\nENV:\nWORKER_STATE_BACKEND=dropbox WORKER_STATE_DROPBOX_PATH=/Content_Plan/.karuselka/worker-state.json\n\n=== TIKTOK ===\nАвто-обрезка до 4 хэштегов. spam → partial IG, НЕ --retry-failed.\n\nФАЗА A: python3 scripts/materialize_cloud_env.py --check\nФАЗА B: $ENV python3 scripts/publish_status.py --pair pair2\nФАЗА C: $ENV python3 scripts/publish_worker.py --pair pair2 --limit 1 --dry-run-first\nФАЗА D: Fixic при инциденте\n\nКонтракт: shared/queue-contract.md\n\n=== PICK (этот cron) ===\n--pick top\nWORKER_STATE_BACKEND=dropbox WORKER_STATE_DROPBOX_PATH=/Content_Plan/.karuselka/worker-state.json python3 scripts/publish_worker.py --pair pair2 --pick top --limit 1 --dry-run-first\n"
     ],
     "model": "",
     "gitConfig": {

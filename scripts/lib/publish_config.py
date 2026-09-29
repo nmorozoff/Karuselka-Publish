@@ -34,6 +34,19 @@ def load_accounts_pairs() -> dict:
     return json.loads(accounts_pairs_path().read_text(encoding="utf-8"))
 
 
+def queue_backend(cfg: dict | None = None) -> str:
+    """dropbox | airtable — источник очереди для publish_worker."""
+    data = cfg if cfg is not None else load_accounts_pairs()
+    raw = (
+        os.environ.get("PUBLISH_QUEUE_BACKEND", "").strip().lower()
+        or str(data.get("publish_queue_backend") or "").strip().lower()
+        or "dropbox"
+    )
+    if raw not in ("dropbox", "airtable"):
+        raise RuntimeError(f"Invalid publish queue backend: {raw}")
+    return raw
+
+
 def queue_dropbox_root(cfg: dict | None = None) -> str:
     """Единая папка очереди для всех каруселей (все пары)."""
     data = cfg if cfg is not None else load_accounts_pairs()
@@ -56,7 +69,6 @@ def load_runtime_env() -> dict[str, str]:
     """Cloud: только os.environ. Локально: publish-memory/*.env.local + os.environ."""
     if os.environ.get("KARUSELKA_RUNTIME", "").lower() == "cloud":
         required = [
-            "AIRTABLE_ACCESS_TOKEN",
             "DROPBOX_APP_KEY",
             "DROPBOX_APP_SECRET",
             "DROPBOX_REFRESH_TOKEN",
@@ -64,6 +76,8 @@ def load_runtime_env() -> dict[str, str]:
             "ZERNIO_INSTAGRAM_ACCOUNT_ID",
             "ZERNIO_TIKTOK_ACCOUNT_ID",
         ]
+        if queue_backend() == "airtable":
+            required.insert(0, "AIRTABLE_ACCESS_TOKEN")
         missing = [k for k in required if not os.environ.get(k)]
         if missing:
             raise RuntimeError(f"Missing cloud env: {', '.join(missing)}")
@@ -86,36 +100,27 @@ def load_runtime_env() -> dict[str, str]:
 
 
 def pair_config(pair_id: str) -> dict:
+    """Zernio-слот (pair1/2/3). Airtable — единая очередь без поля Пара."""
     cfg = load_accounts_pairs()
     key = pair_id if pair_id in ("pair1", "pair2", "pair3") else "pair1"
     out = dict(cfg[key])
     out.setdefault("id", key)
-    unified = cfg.get("airtable_queue")
-    if unified:
-        at = dict(unified)
-        fields = dict(at.get("fields") or {})
-        fields.setdefault("pair", "Пара")
-        at["fields"] = fields
-        out["airtable"] = at
+    out["airtable"] = queue_airtable_config(cfg)
     return out
 
 
-def queue_airtable(cfg: dict | None = None) -> dict | None:
-    """Единая таблица очереди (если настроена)."""
+def queue_airtable_config(cfg: dict | None = None) -> dict:
     data = cfg if cfg is not None else load_accounts_pairs()
-    return data.get("airtable_queue")
+    at = data.get("airtable_queue")
+    if not at:
+        raise KeyError("airtable_queue missing in accounts-pairs.json")
+    return dict(at)
 
 
 def pair_queue_airtable(pair_id: str, cfg: dict | None = None) -> dict:
-    """Airtable config для пары: unified queue или legacy per-pair table."""
-    data = cfg if cfg is not None else load_accounts_pairs()
-    unified = data.get("airtable_queue")
-    if unified:
-        at = dict(unified)
-        at["pair_id"] = pair_id
-        return at
-    key = pair_id if pair_id in ("pair1", "pair2", "pair3") else "pair1"
-    return data[key]["airtable"]
+    """Airtable config: всегда единая очередь."""
+    at = queue_airtable_config(cfg)
+    return {**at, "pair_id": pair_id}
 
 
 def zernio_api_key(env: dict[str, str], pair: dict) -> str:
