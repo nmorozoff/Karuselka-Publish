@@ -100,6 +100,9 @@ def _failed_names_for_run(state: dict, *, retry_failed: bool, include_needs_huma
     for name, meta in (state.get("failed") or {}).items():
         if not isinstance(meta, dict):
             continue
+        err = str(meta.get("error") or "")
+        if err:
+            meta = {**meta, **classify_failure_message(err)}
         if meta.get("needs_human") and not include_needs_human:
             skip.add(name)
         elif retry_failed and meta.get("retryable") is False and not include_needs_human:
