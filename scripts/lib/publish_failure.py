@@ -54,6 +54,14 @@ def classify_failure_message(text: str) -> dict[str, Any]:
             "needs_human": True,
             "retryable": False,
         }
+    if "failed to validate instagram image" in lower and any(
+        x in lower for x in ("status code: 500", "status code: 502", "status code: 503", "status code: 504")
+    ):
+        return {
+            "category": "transient",
+            "needs_human": False,
+            "retryable": True,
+        }
     if any(
         x in lower
         for x in (
