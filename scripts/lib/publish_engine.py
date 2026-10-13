@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from publish_cleanup import assert_zernio_ok, cleanup_carousel_assets
+from publish_cleanup import assert_zernio_ok, cleanup_carousel_assets, purge_carousel_by_name
 from publish_failure import (
     classify_failure_message,
     failed_record,
@@ -203,6 +203,39 @@ def _all_published_names(state: dict) -> set[str]:
         if isinstance(raw, list):
             names.update(raw)
     return names
+
+
+def _reconcile_published_queue_orphans(
+    env: dict[str, str],
+    queue_pair: dict,
+    state: dict,
+    dropbox_token: str,
+) -> list[str]:
+    """Удалить из Queue папки, уже отмеченные published (cleanup не сработал)."""
+    if queue_backend() != "dropbox":
+        return []
+    all_published = _all_published_names(state)
+    if not all_published:
+        return []
+    removed: list[str] = []
+    for rec in list_queue_records(env, queue_pair):
+        name = rec.get("fields", {}).get("Name")
+        if not name or name not in all_published:
+            continue
+        try:
+            purge_carousel_by_name(
+                env=env,
+                queue_pair=queue_pair,
+                carousel_name=name,
+                fields=rec.get("fields", {}),
+                record_id=str(rec.get("id") or f"dropbox:{name}"),
+                dropbox_token=dropbox_token,
+                delete_dropbox_folder=delete_dropbox_folder,
+            )
+            removed.append(name)
+        except Exception:
+            continue
+    return removed
 
 
 def _ready_records(records: list[dict], state: dict) -> list[dict]:
@@ -881,6 +914,7 @@ def run_publish_batch(
     published = _load_published_set(state, accounts_pair_id)
     all_published = _all_published_names(state)
     backend = queue_backend()
+    reconciled_orphans = _reconcile_published_queue_orphans(env, queue_pair, state, dropbox_token)
     records = list_queue_records(env, queue_pair)
 
     if name:
@@ -903,7 +937,12 @@ def run_publish_batch(
         records = apply_pick(records, pick)
     records = records[: max(1, limit)]
     if not records:
-        return {"status": "empty", "message": "Queue empty or all published", "results": []}
+        return {
+            "status": "empty",
+            "message": "Queue empty or all published",
+            "results": [],
+            "reconciled_orphans": reconciled_orphans,
+        }
 
     results: list[dict] = []
     errors: list[dict] = []
