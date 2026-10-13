@@ -24,6 +24,7 @@ from publish_failure import (
 )
 from tiktok_caption import prepare_tiktok_fields
 from dropbox_client import ensure_shared_link, get_access_token
+from publish_slide_validate import validate_instagram_slides
 from http_client import http_json, urlopen
 from publish_config import (
     load_runtime_env,
@@ -705,6 +706,7 @@ def process_record(
     slide_paths: list[str] = media["images"]
     hook_video: str | None = media["hook_video"]
     has_video = bool(hook_video)
+    validate_instagram_slides(dropbox_token, slide_paths)
 
     if dry_run:
         mode = "mixed" if has_video else "photo_carousel"
