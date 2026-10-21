@@ -232,6 +232,52 @@ def send_message(text: str, chat_id: int | None = None) -> dict:
     return data
 
 
+def build_queue_empty_report_text(
+    *,
+    pair_id: str,
+    pair_label: str,
+    ready: int,
+    failed: int,
+    airtable_total: int,
+    reason: str = "dry-run-first",
+) -> str:
+    lines = [f"📭 Karuselka Publish — {pair_id}"]
+    if pair_label and pair_label != pair_id:
+        lines.append(f"({pair_label})")
+    lines.append(f"Очередь: ready={ready}, failed={failed}, airtable={airtable_total}")
+    if ready == 0 and failed == 0 and airtable_total == 0:
+        lines.append("Публикация пропущена: очередь пуста")
+    elif ready == 0 and failed > 0:
+        lines.append(
+            f"Публикация пропущена ({reason}): нет ready каруселей, {failed} в failed"
+        )
+    else:
+        lines.append(f"Публикация пропущена ({reason}): нет ready каруселей")
+    lines.append("Следующий: очередь пуста")
+    return "\n".join(lines)
+
+
+def notify_queue_empty(
+    *,
+    pair_id: str,
+    pair_label: str,
+    ready: int,
+    failed: int,
+    airtable_total: int,
+    reason: str = "dry-run-first",
+) -> None:
+    send_message(
+        build_queue_empty_report_text(
+            pair_id=pair_id,
+            pair_label=pair_label,
+            ready=ready,
+            failed=failed,
+            airtable_total=airtable_total,
+            reason=reason,
+        )
+    )
+
+
 def notify_publish_complete(
     *,
     pair_id: str,
