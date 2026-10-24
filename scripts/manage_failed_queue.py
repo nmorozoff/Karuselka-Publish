@@ -47,9 +47,14 @@ def _find_record(env: dict[str, str], name: str) -> tuple[str, dict] | None:
 def classify_failed(state: dict) -> dict[str, list[str]]:
     out: dict[str, list[str]] = {}
     for name, meta in sorted((state.get("failed") or {}).items()):
-        err = meta.get("error", "") if isinstance(meta, dict) else str(meta)
+        if not isinstance(meta, dict):
+            err = str(meta)
+        else:
+            err = str(meta.get("error") or "")
+            if meta.get("tiktok_error"):
+                err = f"{err}\n{meta['tiktok_error']}"
         cat = meta.get("category") if isinstance(meta, dict) and meta.get("category") else None
-        if not cat:
+        if not cat or cat == "unknown":
             cat = classify_failure_message(err).get("category", "unknown")
         out.setdefault(str(cat), []).append(name)
     return out
@@ -86,8 +91,13 @@ def _names_for_action(state: dict, args: argparse.Namespace) -> list[str]:
 
 def cmd_clear(state: dict, names: list[str], *, dry_run: bool, token: str) -> dict:
     removed = []
+    skipped_partial: list[str] = []
     for name in names:
         if name not in (state.get("failed") or {}):
+            continue
+        meta = state["failed"][name]
+        if isinstance(meta, dict) and meta.get("partial_instagram"):
+            skipped_partial.append(name)
             continue
         if dry_run:
             removed.append(name)
@@ -96,7 +106,12 @@ def cmd_clear(state: dict, names: list[str], *, dry_run: bool, token: str) -> di
         removed.append(name)
     if not dry_run and removed:
         save_state(state, token or None)
-    return {"action": "clear_failed", "dry_run": dry_run, "removed": removed}
+    return {
+        "action": "clear_failed",
+        "dry_run": dry_run,
+        "removed": removed,
+        "skipped_partial": skipped_partial,
+    }
 
 
 def cmd_purge(
