@@ -19,13 +19,13 @@ def zernio_response_ok(res: dict[str, Any] | None) -> bool:
         if post.get("_id"):
             return True
         status = str(post.get("status") or "").lower()
-        if status in ("published", "success", "completed", "scheduled"):
+        if status in ("published", "success", "completed", "scheduled", "draft"):
             return True
         for platform in post.get("platforms") or []:
             if not isinstance(platform, dict):
                 continue
             ps = str(platform.get("status") or "").lower()
-            if ps in ("published", "success"):
+            if ps in ("published", "success", "draft"):
                 return True
     msg = str(res.get("message") or "")
     if msg and any(x in msg.lower() for x in ("error", "fail", "invalid")):
@@ -53,6 +53,12 @@ def classify_failure_message(text: str) -> dict[str, Any]:
             "category": "tiktok_spam",
             "needs_human": True,
             "retryable": False,
+        }
+    if "at capacity" in lower or "direct posting is at capacity" in lower:
+        return {
+            "category": "tiktok_capacity",
+            "needs_human": True,
+            "retryable": True,
         }
     if any(
         x in lower
