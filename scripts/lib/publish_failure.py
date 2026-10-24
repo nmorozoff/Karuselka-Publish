@@ -67,6 +67,19 @@ def classify_failure_message(text: str) -> dict[str, Any]:
             "needs_human": True,
             "retryable": False,
         }
+    if any(
+        x in lower
+        for x in (
+            "failed to validate tiktok image",
+            "tiktok image 1 validation failed",
+            "tiktok image validation failed",
+        )
+    ):
+        return {
+            "category": "tiktok_format",
+            "needs_human": True,
+            "retryable": False,
+        }
     if any(x in lower for x in ("429", "rate limit", "too many requests")):
         return {
             "category": "rate_limit",
