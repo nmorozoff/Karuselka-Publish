@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
+
+_HTTP_STATUS_RE = re.compile(r"\b(?:http\s*(?:error|status)?\s*)?(\d{3})\b", re.I)
 
 
 def zernio_response_ok(res: dict[str, Any] | None) -> bool:
@@ -33,8 +36,13 @@ def zernio_response_ok(res: dict[str, Any] | None) -> bool:
     return bool(post)
 
 
+def _http_statuses(text: str) -> set[str]:
+    return {match.group(1) for match in _HTTP_STATUS_RE.finditer(text)}
+
+
 def classify_failure_message(text: str) -> dict[str, Any]:
     lower = text.lower()
+    statuses = _http_statuses(text)
     if any(
         x in lower
         for x in (
@@ -67,7 +75,7 @@ def classify_failure_message(text: str) -> dict[str, Any]:
             "needs_human": True,
             "retryable": False,
         }
-    if any(x in lower for x in ("429", "rate limit", "too many requests")):
+    if "429" in statuses or any(x in lower for x in ("rate limit", "too many requests")):
         return {
             "category": "rate_limit",
             "needs_human": False,
@@ -76,29 +84,39 @@ def classify_failure_message(text: str) -> dict[str, Any]:
     if any(
         x in lower
         for x in (
+            "at capacity",
+            "capacity right now",
+            "capacity frees up",
+        )
+    ):
+        return {
+            "category": "tiktok_capacity",
+            "needs_human": False,
+            "retryable": True,
+        }
+    if any(
+        x in lower
+        for x in (
             "timeout",
             "timed out",
-            "502",
-            "503",
-            "504",
             "connection reset",
             "connection refused",
             "operation timed out",
         )
-    ):
+    ) or statuses.intersection({"502", "503", "504"}):
         return {
             "category": "transient",
             "needs_human": False,
             "retryable": True,
         }
-    if "409" in lower or "conflict" in lower:
+    if "409" in statuses or "conflict" in lower:
         return {
             "category": "conflict",
             "needs_human": True,
             "retryable": False,
         }
     if "http error 400" in lower or (
-        "400" in lower and any(x in lower for x in ("bad request", "all platforms failed"))
+        "400" in statuses and any(x in lower for x in ("bad request", "all platforms failed"))
     ):
         return {
             "category": "bad_request",
