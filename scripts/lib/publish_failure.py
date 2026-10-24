@@ -57,6 +57,19 @@ def classify_failure_message(text: str) -> dict[str, Any]:
     if any(
         x in lower
         for x in (
+            "direct posting is at capacity",
+            "at capacity right now",
+            "tiktoksettings.draft",
+        )
+    ):
+        return {
+            "category": "tiktok_capacity",
+            "needs_human": False,
+            "retryable": True,
+        }
+    if any(
+        x in lower
+        for x in (
             "aspect ratio",
             "invalid instagram image resolution",
             "failed to validate instagram image",
