@@ -25,7 +25,7 @@ PURGE_CATEGORIES = frozenset(
         "bad_request",
     }
 )
-CLEAR_CATEGORIES = frozenset({"rate_limit", "transient", "unknown"})
+CLEAR_CATEGORIES = frozenset({"rate_limit", "transient", "tiktok_capacity", "unknown"})
 
 
 def _state_token(env: dict[str, str]) -> str:
