@@ -67,6 +67,19 @@ def classify_failure_message(text: str) -> dict[str, Any]:
             "needs_human": True,
             "retryable": False,
         }
+    if any(
+        x in lower
+        for x in (
+            "direct posting is at capacity",
+            "posting is at capacity",
+            "at capacity right now",
+        )
+    ):
+        return {
+            "category": "tiktok_capacity",
+            "needs_human": False,
+            "retryable": True,
+        }
     if any(x in lower for x in ("429", "rate limit", "too many requests")):
         return {
             "category": "rate_limit",
