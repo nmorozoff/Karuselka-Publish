@@ -67,6 +67,19 @@ def classify_failure_message(text: str) -> dict[str, Any]:
             "needs_human": True,
             "retryable": False,
         }
+    if any(
+        x in lower
+        for x in (
+            "public_api_billing_limit_exceeded",
+            "api billing plan limit exceeded",
+            "billing plan limit",
+        )
+    ):
+        return {
+            "category": "airtable_billing_limit",
+            "needs_human": True,
+            "retryable": False,
+        }
     if any(x in lower for x in ("429", "rate limit", "too many requests")):
         return {
             "category": "rate_limit",
