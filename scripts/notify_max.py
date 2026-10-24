@@ -28,16 +28,32 @@ def main() -> None:
     if args.result_file:
         path = Path(args.result_file)
         result = json.loads(path.read_text(encoding="utf-8"))
-        # При batch-run берём первый результат; иначе сам result
-        record = result.get("results", [result])[0] if result.get("results") else result
         pair_label = args.pair
-        notify_from_publish_result(
-            pair_id=args.pair,
-            pair_label=pair_label,
-            carousel_name=record.get("name", "unknown"),
-            result=record,
-            next_folder=args.next_folder,
-        )
+        if result.get("results"):
+            record = result["results"][0]
+            notify_from_publish_result(
+                pair_id=args.pair,
+                pair_label=pair_label,
+                carousel_name=record.get("name", "unknown"),
+                result=record,
+                next_folder=args.next_folder,
+            )
+        elif result.get("errors"):
+            err = result["errors"][0]
+            send_message(
+                f"🚀 Karuselka Publish — {args.pair}\n"
+                f"Папка: {err.get('name', 'unknown')}\n"
+                f"❌ Ошибка: {err.get('error', 'unknown')[:1500]}\n"
+                f"Следующий: {args.next_folder}"
+            )
+        else:
+            notify_from_publish_result(
+                pair_id=args.pair,
+                pair_label=pair_label,
+                carousel_name=result.get("name", "unknown"),
+                result=result,
+                next_folder=args.next_folder,
+            )
         print("OK")
         return
 
