@@ -42,6 +42,8 @@ def urlopen(req: urllib.request.Request, *, timeout: int = 60, retries: int = 3)
         for attempt in range(max(1, retries)):
             try:
                 return _direct_opener().open(req, timeout=timeout)
+            except urllib.error.HTTPError:
+                raise
             except Exception as exc:  # noqa: BLE001
                 last_err = exc
                 if attempt + 1 < retries:
