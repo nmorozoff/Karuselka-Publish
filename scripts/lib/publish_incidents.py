@@ -11,7 +11,7 @@ from typing import Any
 from publish_config import MEMORY
 
 QUEUE_PATH = MEMORY / "pipeline-fix-queue.md"
-INC_ID_RE = re.compile(r"^INC-\d{8}-\d{3}", re.MULTILINE)
+INC_ID_RE = re.compile(r"INC-\d{8}-\d{3}")
 
 
 def _next_incident_id() -> str:

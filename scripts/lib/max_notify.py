@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 from datetime import datetime, timezone
@@ -119,6 +120,47 @@ def _zernio_platform_status(zernio_response: dict | None) -> str:
     if msg and any(x in lower for x in ("retry", "pending", "scheduled")):
         return "pending"
     return "unknown"
+
+
+def _parse_zernio_error_text(error_text: str) -> tuple[str | None, dict | None]:
+    """Parse 'Zernio {platform} error: {...}' from worker errors[]."""
+    m = re.match(r"Zernio (instagram|tiktok) (?:error|rejected):\s*(.+)", error_text, re.DOTALL)
+    if not m:
+        return None, None
+    platform = m.group(1)
+    tail = m.group(2).strip()
+    try:
+        payload = ast.literal_eval(tail)
+        if isinstance(payload, dict):
+            return platform, payload
+    except (ValueError, SyntaxError):
+        pass
+    return platform, {"error": tail[:500]}
+
+
+def record_from_worker_batch(result: dict) -> tuple[str, dict]:
+    """Build notify record from worker-last-run.json (results[] or errors[])."""
+    if result.get("results"):
+        record = result["results"][0]
+        return str(record.get("name") or "unknown"), record
+
+    if result.get("errors"):
+        err_item = result["errors"][0]
+        carousel_name = str(err_item.get("name") or "unknown")
+        error_text = str(err_item.get("error") or "")
+        platform, payload = _parse_zernio_error_text(error_text)
+        record: dict = {"name": carousel_name}
+        if platform == "instagram" and payload:
+            record["instagram"] = payload
+        elif platform == "tiktok" and payload:
+            record["tiktok"] = payload
+            # assert_zernio_ok checks instagram before tiktok
+            record["instagram"] = {"post": {"status": "published"}}
+        elif error_text:
+            record["error"] = error_text[:300]
+        return carousel_name, record
+
+    return "unknown", result
 
 
 def _zernio_platform_detail(zernio_response: dict | None) -> str:
