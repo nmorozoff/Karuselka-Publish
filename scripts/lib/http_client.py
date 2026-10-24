@@ -36,16 +36,40 @@ def _direct_opener() -> urllib.request.OpenerDirector:
     return urllib.request.build_opener(urllib.request.ProxyHandler({}), https)
 
 
+def _retry_sleep_seconds(exc: Exception, attempt: int) -> float | None:
+    """Backoff for transient errors; None = do not retry."""
+    if isinstance(exc, urllib.error.HTTPError) and exc.code == 429:
+        retry_after = exc.headers.get("Retry-After") if exc.headers else None
+        if retry_after:
+            try:
+                return max(1.0, float(retry_after))
+            except ValueError:
+                pass
+        return min(120.0, 15.0 * (2**attempt))
+    if isinstance(exc, urllib.error.HTTPError) and exc.code in (502, 503, 504):
+        return min(60.0, 2.0 * (2**attempt))
+    return 0.5 * (attempt + 1)
+
+
 def urlopen(req: urllib.request.Request, *, timeout: int = 60, retries: int = 3) -> Any:
     last_err: Exception | None = None
+    max_attempts = max(1, retries)
+    attempt = 0
     with _without_proxy_env():
-        for attempt in range(max(1, retries)):
+        while attempt < max_attempts:
             try:
                 return _direct_opener().open(req, timeout=timeout)
             except Exception as exc:  # noqa: BLE001
                 last_err = exc
-                if attempt + 1 < retries:
-                    time.sleep(0.5 * (attempt + 1))
+                attempt += 1
+                if isinstance(exc, urllib.error.HTTPError) and exc.code == 429:
+                    max_attempts = max(max_attempts, 6)
+                if attempt >= max_attempts:
+                    break
+                delay = _retry_sleep_seconds(exc, attempt - 1)
+                if delay is None:
+                    break
+                time.sleep(delay)
     raise RuntimeError(f"HTTP unreachable {req.full_url}: {last_err}") from last_err
 
 
