@@ -36,7 +36,25 @@ def _direct_opener() -> urllib.request.OpenerDirector:
     return urllib.request.build_opener(urllib.request.ProxyHandler({}), https)
 
 
-def urlopen(req: urllib.request.Request, *, timeout: int = 60, retries: int = 3) -> Any:
+def _retry_sleep_seconds(exc: Exception, attempt: int) -> float:
+    if isinstance(exc, urllib.error.HTTPError) and exc.code == 429:
+        retry_after = exc.headers.get("Retry-After") if exc.headers else None
+        if retry_after:
+            try:
+                return max(1.0, float(retry_after))
+            except ValueError:
+                pass
+        return min(30.0, 2.0 * (2**attempt))
+    return 0.5 * (attempt + 1)
+
+
+def _is_retriable_http(exc: Exception) -> bool:
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in (429, 500, 502, 503, 504)
+    return True
+
+
+def urlopen(req: urllib.request.Request, *, timeout: int = 60, retries: int = 8) -> Any:
     last_err: Exception | None = None
     with _without_proxy_env():
         for attempt in range(max(1, retries)):
@@ -44,8 +62,10 @@ def urlopen(req: urllib.request.Request, *, timeout: int = 60, retries: int = 3)
                 return _direct_opener().open(req, timeout=timeout)
             except Exception as exc:  # noqa: BLE001
                 last_err = exc
-                if attempt + 1 < retries:
-                    time.sleep(0.5 * (attempt + 1))
+                if attempt + 1 < retries and _is_retriable_http(exc):
+                    time.sleep(_retry_sleep_seconds(exc, attempt))
+                    continue
+                break
     raise RuntimeError(f"HTTP unreachable {req.full_url}: {last_err}") from last_err
 
 
