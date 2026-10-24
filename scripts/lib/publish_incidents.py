@@ -11,7 +11,7 @@ from typing import Any
 from publish_config import MEMORY
 
 QUEUE_PATH = MEMORY / "pipeline-fix-queue.md"
-INC_ID_RE = re.compile(r"^INC-\d{8}-\d{3}", re.MULTILINE)
+INC_ID_RE = re.compile(r"INC-\d{8}-\d{3}")
 
 
 def _next_incident_id() -> str:
@@ -21,7 +21,7 @@ def _next_incident_id() -> str:
         return f"{prefix}001"
     text = QUEUE_PATH.read_text(encoding="utf-8")
     nums = [
-        int(m.group(0).split("-")[-1])
+        int(m.group(0)[len(prefix) :])
         for m in INC_ID_RE.finditer(text)
         if m.group(0).startswith(prefix)
     ]
