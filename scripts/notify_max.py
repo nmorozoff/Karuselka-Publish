@@ -9,7 +9,23 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
-from max_notify import notify_from_publish_result, send_message  # noqa: E402
+from max_notify import notify_from_publish_result, notify_publish_complete, send_message  # noqa: E402
+
+
+def _record_from_worker_output(result: dict) -> tuple[str, dict]:
+    """Normalize worker-last-run.json (success or batch error) into a notify record."""
+    if result.get("results"):
+        rec = result["results"][0]
+        return rec.get("name", "unknown"), rec
+    if result.get("errors"):
+        err = result["errors"][0]
+        name = err.get("name", "unknown")
+        rec: dict = {"name": name, "error": err.get("error", "unknown error")}
+        if err.get("partial_instagram"):
+            rec["instagram"] = {"status": "published", "partial": True}
+            rec["tiktok"] = {"error": str(err.get("error", ""))[:500]}
+        return name, rec
+    return result.get("name", "unknown"), result
 
 
 def main() -> None:
@@ -28,16 +44,24 @@ def main() -> None:
     if args.result_file:
         path = Path(args.result_file)
         result = json.loads(path.read_text(encoding="utf-8"))
-        # При batch-run берём первый результат; иначе сам result
-        record = result.get("results", [result])[0] if result.get("results") else result
+        carousel_name, record = _record_from_worker_output(result)
         pair_label = args.pair
-        notify_from_publish_result(
-            pair_id=args.pair,
-            pair_label=pair_label,
-            carousel_name=record.get("name", "unknown"),
-            result=record,
-            next_folder=args.next_folder,
-        )
+        if record.get("error") and not record.get("instagram") and not record.get("tiktok"):
+            notify_publish_complete(
+                pair_id=args.pair,
+                pair_label=pair_label,
+                carousel_name=carousel_name,
+                error=str(record.get("error", ""))[:1500],
+                next_folder=args.next_folder,
+            )
+        else:
+            notify_from_publish_result(
+                pair_id=args.pair,
+                pair_label=pair_label,
+                carousel_name=carousel_name,
+                result=record,
+                next_folder=args.next_folder,
+            )
         print("OK")
         return
 
