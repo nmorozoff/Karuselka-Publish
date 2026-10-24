@@ -36,15 +36,38 @@ def _direct_opener() -> urllib.request.OpenerDirector:
     return urllib.request.build_opener(urllib.request.ProxyHandler({}), https)
 
 
+def _retry_delay_seconds(exc: urllib.error.HTTPError, attempt: int) -> float | None:
+    """Seconds to wait before retry, or None if this response should not be retried."""
+    if exc.code == 429:
+        retry_after = exc.headers.get("Retry-After") if exc.headers else None
+        if retry_after:
+            try:
+                return min(float(retry_after), 120.0)
+            except ValueError:
+                pass
+        return min(5.0 * (2**attempt), 60.0)
+    if exc.code in (500, 502, 503, 504):
+        return 0.5 * (attempt + 1)
+    return None
+
+
 def urlopen(req: urllib.request.Request, *, timeout: int = 60, retries: int = 3) -> Any:
     last_err: Exception | None = None
+    max_attempts = max(1, retries)
     with _without_proxy_env():
-        for attempt in range(max(1, retries)):
+        for attempt in range(max_attempts):
             try:
                 return _direct_opener().open(req, timeout=timeout)
+            except urllib.error.HTTPError as exc:
+                last_err = exc
+                delay = _retry_delay_seconds(exc, attempt)
+                if delay is not None and attempt + 1 < max_attempts:
+                    time.sleep(delay)
+                    continue
+                raise
             except Exception as exc:  # noqa: BLE001
                 last_err = exc
-                if attempt + 1 < retries:
+                if attempt + 1 < max_attempts:
                     time.sleep(0.5 * (attempt + 1))
     raise RuntimeError(f"HTTP unreachable {req.full_url}: {last_err}") from last_err
 
@@ -64,7 +87,7 @@ def http_json(
         hdrs.setdefault("Content-Type", "application/json")
     req = urllib.request.Request(url, data=None, headers=hdrs, method=method)
     try:
-        with urlopen(_request_with_body(req, body_raw), timeout=timeout) as resp:
+        with urlopen(_request_with_body(req, body_raw), timeout=timeout, retries=8) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
             return json.loads(raw) if raw.strip() else {}
     except urllib.error.HTTPError as e:
