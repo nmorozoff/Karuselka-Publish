@@ -901,7 +901,9 @@ def run_publish_batch(
     records = sort_queue_ready(records, backend)
     if not name and pick:
         records = apply_pick(records, pick)
-    records = records[: max(1, limit)]
+    if limit <= 0:
+        return {"status": "empty", "message": "limit is 0", "results": []}
+    records = records[:limit]
     if not records:
         return {"status": "empty", "message": "Queue empty or all published", "results": []}
 
