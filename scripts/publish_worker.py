@@ -98,14 +98,24 @@ def main() -> None:
         if dry_result.get("status") == "empty":
             dry_result["mode"] = "dry_run_first"
             dry_result["aborted"] = True
-            dry_result["reason"] = "queue empty"
+            blocked = (dry_result.get("queue_total") or 0) > 0 and (dry_result.get("ready") or 0) == 0
+            dry_result["reason"] = "queue blocked by failed" if blocked else "queue empty"
             try:
                 from publish_incidents import log_incident
 
+                err = dry_result.get("message") or "queue empty at dry-run-first"
+                if blocked:
+                    err = f"no ready at dry-run-first: {err}"
                 log_incident(
                     pair=args.pair,
                     stage="queue",
-                    error="queue empty at dry-run-first",
+                    error=err[:4000],
+                    context={
+                        "queue_total": dry_result.get("queue_total"),
+                        "ready": dry_result.get("ready"),
+                        "reason": dry_result["reason"],
+                        "worker_last_run": "publish-memory/output/worker-last-run.json",
+                    },
                 )
             except Exception:
                 pass

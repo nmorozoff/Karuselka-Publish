@@ -881,7 +881,8 @@ def run_publish_batch(
     published = _load_published_set(state, accounts_pair_id)
     all_published = _all_published_names(state)
     backend = queue_backend()
-    records = list_queue_records(env, queue_pair)
+    all_records = list_queue_records(env, queue_pair)
+    records = all_records
 
     if name:
         records = [r for r in records if r.get("fields", {}).get("Name") == name]
@@ -903,7 +904,21 @@ def run_publish_batch(
         records = apply_pick(records, pick)
     records = records[: max(1, limit)]
     if not records:
-        return {"status": "empty", "message": "Queue empty or all published", "results": []}
+        queue_total = len(all_records)
+        ready_count = len(sort_queue_ready(_ready_records(all_records, state), backend))
+        message = "Queue empty or all published"
+        if queue_total > 0 and ready_count == 0:
+            message = (
+                f"No ready carousels: {queue_total} in queue, all blocked "
+                f"(published/failed/incomplete)"
+            )
+        return {
+            "status": "empty",
+            "message": message,
+            "queue_total": queue_total,
+            "ready": ready_count,
+            "results": [],
+        }
 
     results: list[dict] = []
     errors: list[dict] = []
