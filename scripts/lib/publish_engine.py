@@ -218,6 +218,30 @@ def _ready_records(records: list[dict], state: dict) -> list[dict]:
     ]
 
 
+def _blocked_failed_queue(state: dict, records: list[dict]) -> list[dict[str, Any]]:
+    """Ready cards in Dropbox that are only skipped because they sit in failed."""
+    published = _all_published_names(state)
+    failed = state.get("failed") or {}
+    blocked: list[dict[str, Any]] = []
+    for rec in records:
+        name = rec.get("fields", {}).get("Name")
+        if not name or name in published:
+            continue
+        meta = failed.get(name)
+        if not isinstance(meta, dict):
+            continue
+        blocked.append(
+            {
+                "name": name,
+                "category": meta.get("category"),
+                "needs_human": meta.get("needs_human"),
+                "retryable": meta.get("retryable"),
+                "error": str(meta.get("error") or "")[:500],
+            }
+        )
+    return blocked
+
+
 def queue_next_hint(
     env: dict[str, str],
     pair_id: str,
@@ -903,6 +927,23 @@ def run_publish_batch(
         records = apply_pick(records, pick)
     records = records[: max(1, limit)]
     if not records:
+        all_ready = sort_queue_ready(
+            [r for r in list_queue_records(env, queue_pair) if not include_published],
+            backend,
+        )
+        blocked = _blocked_failed_queue(state, all_ready)
+        if blocked:
+            first = blocked[0]
+            return {
+                "status": "blocked",
+                "message": (
+                    f"Queue blocked: {len(blocked)} ready carousel(s) in failed "
+                    f"(first: {first['name']})"
+                ),
+                "blocked_failed": blocked,
+                "queue_ready_total": len(all_ready),
+                "results": [],
+            }
         return {"status": "empty", "message": "Queue empty or all published", "results": []}
 
     results: list[dict] = []

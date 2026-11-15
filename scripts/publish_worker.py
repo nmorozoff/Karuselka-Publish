@@ -95,17 +95,27 @@ def main() -> None:
                 pass
             _write_and_print(dry_result)
             raise SystemExit(1)
-        if dry_result.get("status") == "empty":
+        if dry_result.get("status") in ("empty", "blocked"):
             dry_result["mode"] = "dry_run_first"
             dry_result["aborted"] = True
-            dry_result["reason"] = "queue empty"
+            dry_result["reason"] = dry_result.get("status")
             try:
                 from publish_incidents import log_incident
 
+                blocked = dry_result.get("blocked_failed") or []
+                first = blocked[0] if blocked else {}
+                if dry_result.get("status") == "blocked":
+                    err = dry_result.get("message") or "queue blocked by failed"
+                    carousel = first.get("name")
+                else:
+                    err = "queue empty at dry-run-first"
+                    carousel = None
                 log_incident(
                     pair=args.pair,
                     stage="queue",
-                    error="queue empty at dry-run-first",
+                    error=err,
+                    carousel=carousel,
+                    context={"blocked_failed": blocked[:5]} if blocked else None,
                 )
             except Exception:
                 pass
